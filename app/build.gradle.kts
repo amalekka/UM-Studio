@@ -10,7 +10,7 @@ android {
   compileSdk = 36
 
   defaultConfig {
-    applicationId = "com.aistudio.livestream.kxmpzq"
+    applicationId = "com.um.studio"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -60,7 +60,14 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        it.systemProperty("robolectric.dependency.repo.url", "file:///home/appuser/.m2/repository")
+      }
+    }
+  }
   lint {
     abortOnError = false
     checkReleaseBuilds = false

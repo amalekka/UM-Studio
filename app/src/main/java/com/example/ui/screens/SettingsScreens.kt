@@ -45,67 +45,7 @@ import com.example.ui.components.*
 
 @Composable
 fun EndpointsConfigScreen(viewModel: MainViewModel) {
-    val uiState by viewModel.uiState.collectAsState()
-    
-    SettingsBackground {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Text(
-                "DESTINATIONS", 
-                style = MaterialTheme.typography.headlineSmall, 
-                fontWeight = FontWeight.Black,
-                color = Color.White,
-                letterSpacing = 2.sp
-            )
-            Text(
-                "MULTI-PLATFORM SIMULCAST ACTIVE", 
-                style = MaterialTheme.typography.labelSmall, 
-                color = Color(0xFF818CF8)
-            )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                // Multi-Platform Section
-                item {
-                    GlassSectionCard(title = "SIMULTANEOUS RESTREAMING") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            uiState.endpoints.filter { it !is PlatformEndpoint.CustomRTMP }.forEach { endpoint ->
-                                PlatformToggleRow(
-                                    endpoint = endpoint,
-                                    onToggle = { enabled ->
-                                        val newList = uiState.endpoints.map { if (it.name == endpoint.name) updateEndpointEnabled(it, enabled) else it }
-                                        viewModel.updateEndpoints(newList)
-                                    },
-                                    onKeyChange = { key ->
-                                        val newList = uiState.endpoints.map { if (it.name == endpoint.name) updateEndpointKey(it, key) else it }
-                                        viewModel.updateEndpoints(newList)
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-                
-                // Custom RTMP Section
-                val customRtmps = uiState.endpoints.filterIsInstance<PlatformEndpoint.CustomRTMP>()
-                if (customRtmps.isNotEmpty()) {
-                    item {
-                        GlassSectionCard(title = "RTMP CONFIGURATION") {
-                            customRtmps.forEach { rtmp ->
-                                CustomRtmpBlock(
-                                    rtmp = rtmp,
-                                    onUpdate = { updated ->
-                                        val newList = uiState.endpoints.map { if (it.name == rtmp.name) updated else it }
-                                        viewModel.updateEndpoints(newList)
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    DestinationsScreen(viewModel)
 }
 
 @Composable
@@ -121,14 +61,14 @@ fun AdvancedSettingsScreen(viewModel: MainViewModel) {
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
-                "STREAM ENGINE", 
+                "ENGINE", 
                 style = MaterialTheme.typography.headlineSmall, 
                 fontWeight = FontWeight.Black,
                 color = Color.White,
                 letterSpacing = 2.sp
             )
             Text(
-                "HARDWARE OPTIMIZED BROADCAST", 
+                "HW ENCODING", 
                 style = MaterialTheme.typography.labelSmall, 
                 color = Color(0xFF38BDF8)
             )
@@ -373,6 +313,8 @@ private fun updateEndpointEnabled(endpoint: PlatformEndpoint, enabled: Boolean):
     is PlatformEndpoint.Twitch -> endpoint.copy(isEnabled = enabled)
     is PlatformEndpoint.TikTok -> endpoint.copy(isEnabled = enabled)
     is PlatformEndpoint.Twitter -> endpoint.copy(isEnabled = enabled)
+    is PlatformEndpoint.Instagram -> endpoint.copy(isEnabled = enabled)
+    is PlatformEndpoint.Kick -> endpoint.copy(isEnabled = enabled)
     is PlatformEndpoint.CustomRTMP -> endpoint.copy(isEnabled = enabled)
 }
 
@@ -382,5 +324,7 @@ private fun updateEndpointKey(endpoint: PlatformEndpoint, key: String): Platform
     is PlatformEndpoint.Twitch -> endpoint.copy(streamKey = key)
     is PlatformEndpoint.TikTok -> endpoint.copy(streamKey = key)
     is PlatformEndpoint.Twitter -> endpoint.copy(streamKey = key)
+    is PlatformEndpoint.Instagram -> endpoint.copy(streamKey = key)
+    is PlatformEndpoint.Kick -> endpoint.copy(streamKey = key)
     is PlatformEndpoint.CustomRTMP -> endpoint.copy(streamKey = key)
 }

@@ -54,14 +54,43 @@ class StreamEngineManager(
     private val _bitrate = MutableStateFlow(0)
     val bitrate: StateFlow<Int> = _bitrate
 
+    private val _fps = MutableStateFlow(0)
+    val fps: StateFlow<Int> = _fps
+
+    private val _audioLevelL = MutableStateFlow(0f)
+    val audioLevelL: StateFlow<Float> = _audioLevelL
+
+    private val _audioLevelR = MutableStateFlow(0f)
+    val audioLevelR: StateFlow<Float> = _audioLevelR
+
+    private val _isFlashOn = MutableStateFlow(false)
+    val isFlashOn: StateFlow<Boolean> = _isFlashOn
+
+    private val _isFrontCamera = MutableStateFlow(false)
+    val isFrontCamera: StateFlow<Boolean> = _isFrontCamera
+
+    private var isAudioMutedInternal = false
+
     private var currentConfig: StreamConfig = StreamConfig()
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
+    private val audioEffect = object : com.pedro.encoder.input.audio.CustomAudioEffect() {
+        override fun process(pcmBuffer: ByteArray): ByteArray {
+            calculateAudioLevels(pcmBuffer)
+            return pcmBuffer
+        }
+    }
+
     init {
-        rtmpDisplay = RtmpDisplay(context, true, connectChecker)
+        rtmpDisplay = RtmpDisplay(context, true, connectChecker).apply {
+            setFpsListener { measuredFps ->
+                _fps.value = measuredFps
+            }
+            setCustomAudioEffect(audioEffect)
+        }
     }
 
     fun setConfig(config: StreamConfig) {
@@ -117,7 +146,12 @@ class StreamEngineManager(
     fun initCamera(openGlView: OpenGlView) {
         if (isReleased) return
         if (rtmpCamera2 == null) {
-            rtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
+            rtmpCamera2 = RtmpCamera2(openGlView, connectChecker).apply {
+                setFpsListener { measuredFps ->
+                    _fps.value = measuredFps
+                }
+                setCustomAudioEffect(audioEffect)
+            }
         } else {
             try {
                 rtmpCamera2?.replaceView(openGlView)
@@ -125,7 +159,49 @@ class StreamEngineManager(
                 Log.e("StreamEngine", "Failed to replace view: ${e.message}")
             }
         }
+        _isFrontCamera.value = rtmpCamera2?.isFrontCamera == true
+        _isFlashOn.value = rtmpCamera2?.isLanternEnabled == true
         startPreview()
+    }
+
+    private fun calculateAudioLevels(buffer: ByteArray) {
+        if (!isStreaming() || isAudioMutedInternal) {
+            _audioLevelL.value = 0f
+            _audioLevelR.value = 0f
+            return
+        }
+        val sampleCount = buffer.size / 2
+        if (sampleCount <= 0) return
+
+        var sumL = 0.0
+        var sumR = 0.0
+        var countL = 0
+        var countR = 0
+
+        for (i in 0 until buffer.size - 1 step 2) {
+            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
+            if ((i / 2) % 2 == 0) {
+                sumL += sample * sample
+                countL++
+            } else {
+                sumR += sample * sample
+                countR++
+            }
+        }
+        if (countR == 0) {
+            sumR = sumL
+            countR = countL
+        }
+        val rmsL = kotlin.math.sqrt(sumL / countL.coerceAtLeast(1)) / 32768.0
+        val rmsR = kotlin.math.sqrt(sumR / countR.coerceAtLeast(1)) / 32768.0
+
+        val targetL = (rmsL * 4.5).coerceIn(0.0, 1.0).toFloat()
+        val targetR = (rmsR * 4.5).coerceIn(0.0, 1.0).toFloat()
+
+        val prevL = _audioLevelL.value
+        val prevR = _audioLevelR.value
+        _audioLevelL.value = if (targetL > prevL) targetL else (prevL * 0.85f).coerceAtLeast(0f)
+        _audioLevelR.value = if (targetR > prevR) targetR else (prevR * 0.85f).coerceAtLeast(0f)
     }
 
     fun setPreviewView(openGlView: OpenGlView?) {
@@ -234,6 +310,10 @@ class StreamEngineManager(
         reconnectJob?.cancel()
         reconnectAttempts = 0
         _status.value = StreamingStatus.IDLE
+        _bitrate.value = 0
+        _fps.value = 0
+        _audioLevelL.value = 0f
+        _audioLevelR.value = 0f
     }
 
     private fun isStreaming(): Boolean {
@@ -247,16 +327,29 @@ class StreamEngineManager(
 
     fun switchCamera() {
         if (isReleased) return
-        rtmpCamera2?.switchCamera()
+        try {
+            if (_isFlashOn.value) {
+                rtmpCamera2?.disableLantern()
+                _isFlashOn.value = false
+            }
+            rtmpCamera2?.switchCamera()
+            _isFrontCamera.value = rtmpCamera2?.isFrontCamera == true
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Error switching camera", e)
+        }
     }
 
     fun muteAudio() {
+        isAudioMutedInternal = true
+        _audioLevelL.value = 0f
+        _audioLevelR.value = 0f
         if (isReleased) return
         rtmpCamera2?.disableAudio()
         rtmpDisplay?.disableAudio()
     }
 
     fun unmuteAudio() {
+        isAudioMutedInternal = false
         if (isReleased) return
         rtmpCamera2?.enableAudio()
         rtmpDisplay?.enableAudio()
@@ -274,15 +367,32 @@ class StreamEngineManager(
         }
     }
 
-    fun toggleFlash() {
-        if (isReleased) return
-        if (rtmpCamera2?.isFrontCamera == false) {
-            if (rtmpCamera2?.isLanternEnabled == true) {
-                rtmpCamera2?.disableLantern()
-            } else {
-                rtmpCamera2?.enableLantern()
-            }
+    fun toggleFlash(): Boolean {
+        if (isReleased) return false
+        val camera = rtmpCamera2 ?: return false
+        if (camera.isFrontCamera) {
+            _isFlashOn.value = false
+            return false
         }
+        return try {
+            if (camera.isLanternEnabled) {
+                camera.disableLantern()
+                _isFlashOn.value = false
+            } else {
+                camera.enableLantern()
+                _isFlashOn.value = true
+            }
+            true
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Failed to toggle lantern: ${e.message}")
+            _isFlashOn.value = false
+            false
+        }
+    }
+
+    fun onNewBitrate(bitrateBps: Long) {
+        if (isReleased) return
+        _bitrate.value = (bitrateBps / 1000).toInt()
     }
 
     private fun calculateResolution(quality: VideoQuality, aspect: AspectRatioMode): Pair<Int, Int> {

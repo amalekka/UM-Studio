@@ -121,7 +121,7 @@ class LiveStreamService : Service(), ConnectChecker {
         )
 
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("LiveStream Pro")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(content)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
@@ -150,7 +150,7 @@ class LiveStreamService : Service(), ConnectChecker {
     }
 
     override fun onNewBitrate(bitrate: Long) {
-        // Handled by BitrateAdapter in StreamEngineManager
+        streamEngineManager?.onNewBitrate(bitrate)
     }
 
     override fun onDisconnect() {

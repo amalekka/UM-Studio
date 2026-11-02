@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val mainViewModel: MainViewModel = viewModel()
                     viewModel = mainViewModel
+                    mainViewModel.initDestinations(this@MainActivity)
                     
                     MainScreen(mainViewModel)
                 }

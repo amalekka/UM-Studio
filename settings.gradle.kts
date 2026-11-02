@@ -23,6 +23,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "LiveStream Pro"
+rootProject.name = "UM Studio"
 
 include(":app")

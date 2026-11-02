@@ -1,15 +1,26 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.example.ui.screens
 
+import android.content.Context
+import android.graphics.BitmapFactory
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,25 +29,41 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.ui.PlayerView
+import com.example.MainActivity
 import com.example.core.streaming.StreamSource
-import com.example.core.streaming.StreamingStatus
 import com.example.ui.MainViewModel
 import com.example.ui.components.*
 import com.pedro.library.view.OpenGlView
+import java.io.File
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var currentTab by remember { mutableIntStateOf(0) }
+
+    androidx.activity.compose.BackHandler(enabled = currentTab != 0) {
+        currentTab = 0
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -90,8 +117,12 @@ fun MainScreen(viewModel: MainViewModel) {
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
             when (currentTab) {
-                0 -> StudioPreviewScreen(viewModel)
-                1 -> EndpointsConfigScreen(viewModel)
+                0 -> StudioPreviewScreen(
+                    viewModel = viewModel,
+                    onNavigateToDestinations = { currentTab = 1 },
+                    onNavigateToSettings = { currentTab = 2 }
+                )
+                1 -> DestinationsScreen(viewModel)
                 2 -> AdvancedSettingsScreen(viewModel)
             }
         }
@@ -100,7 +131,11 @@ fun MainScreen(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StudioPreviewScreen(viewModel: MainViewModel) {
+fun StudioPreviewScreen(
+    viewModel: MainViewModel,
+    onNavigateToDestinations: () -> Unit,
+    onNavigateToSettings: () -> Unit
+) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     
@@ -147,6 +182,40 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxSize()
         )
 
+        // Screen Capture Overlay Notice
+        if (uiState.currentSource == StreamSource.SCREEN) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp),
+                color = Color(0xDD0D111C),
+                shape = RoundedCornerShape(18.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Default.ScreenShare, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(44.dp))
+                    Text("SCREEN BROADCAST MODE", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                    Text(
+                        if (uiState.isStreaming) "Device display is active and broadcasting" else "Tap GO LIVE to begin screen mirror stream",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Button(
+                        onClick = { viewModel.toggleSource(StreamSource.CAMERA) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3338BDF8)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("SWITCH TO CAMERA", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         // Top & Bottom Vignette
         Box(
             modifier = Modifier
@@ -155,7 +224,7 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
                 .align(Alignment.TopCenter)
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                        colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
                     )
                 )
         )
@@ -166,7 +235,7 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
                 .align(Alignment.BottomCenter)
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
                     )
                 )
         )
@@ -177,19 +246,35 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            // ROW 1: LIVE BADGE & SETTINGS
+            // ROW 1: LIVE BADGE & DESTINATIONS / SETTINGS BUTTONS
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                GlassPill(glowColor = if (uiState.isStreaming) Color(0xFFEF4444) else Color.Gray) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                // Live status badge
+                GlassPill(glowColor = if (uiState.isStreaming) Color(0xFFEF4444) else Color.Transparent) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        val pulseAlpha by rememberInfiniteTransition().animateFloat(
+                            initialValue = 0.4f,
+                            targetValue = 1.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(600, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "Pulse"
+                        )
                         Box(
                             modifier = Modifier
-                                .size(8.dp)
+                                .size(9.dp)
                                 .clip(CircleShape)
-                                .background(if (uiState.isStreaming) Color(0xFFEF4444) else Color.Gray)
+                                .background(
+                                    if (uiState.isStreaming) Color(0xFFEF4444).copy(alpha = pulseAlpha)
+                                    else Color.Gray
+                                )
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
@@ -209,22 +294,31 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Destinations shortcut button
                     GlassPill {
-                        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                            Icon(Icons.Default.CloudQueue, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Icon(Icons.Default.Share, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable { onNavigateToDestinations() }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.CloudQueue, null, tint = Color(0xFF818CF8), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(Icons.Default.Share, null, tint = Color(0xFF818CF8), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("DESTS", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
+                    // Settings gear button (WIRED TO TAB 2)
                     IconButton(
-                        onClick = { /* Settings Action */ },
+                        onClick = onNavigateToSettings,
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
                             .background(Color(0xBF1E2330))
                     ) {
-                        Icon(Icons.Default.Settings, null, tint = Color.White.copy(alpha = 0.8f))
+                        Icon(Icons.Default.Settings, "Settings", tint = Color.White.copy(alpha = 0.85f))
                     }
                 }
             }
@@ -240,11 +334,14 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // MIDDLE: AUDIO VU METER (LEFT)
+            // MIDDLE: AUDIO VU METER (LEFT) - REAL HARDWARE/AUDIO MONITOR
             Box(modifier = Modifier.fillMaxWidth().weight(2f)) {
                 DualAudioVU(
                     modifier = Modifier.align(Alignment.CenterStart),
-                    isMuted = !uiState.isMicEnabled
+                    isStreaming = uiState.isStreaming,
+                    isMuted = !uiState.isMicEnabled,
+                    levelL = uiState.audioLevelL,
+                    levelR = uiState.audioLevelR
                 )
             }
 
@@ -269,17 +366,26 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
                     modifier = Modifier.weight(0.55f),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // GO LIVE CAPSULE
+                    // GO LIVE CAPSULE (VALIDATES DESTINATIONS)
                     GoLiveButton(
                         isStreaming = uiState.isStreaming,
                         onClick = {
                             if (uiState.isStreaming) {
                                 viewModel.stopStream()
                             } else {
-                                if (uiState.currentSource == StreamSource.SCREEN) {
-                                    (context as? com.example.MainActivity)?.requestScreenCapture()
+                                if (!viewModel.hasValidDestination()) {
+                                    Toast.makeText(
+                                        context,
+                                        "Please configure at least one Destination Stream Key to go live!",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    onNavigateToDestinations()
                                 } else {
-                                    viewModel.startStream(context)
+                                    if (uiState.currentSource == StreamSource.SCREEN) {
+                                        (context as? MainActivity)?.requestScreenCapture()
+                                    } else {
+                                        viewModel.startStream(context)
+                                    }
                                 }
                             }
                         }
@@ -291,7 +397,8 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
                         onMicToggle = { viewModel.toggleMic(!uiState.isMicEnabled) },
                         onFlip = { viewModel.switchCamera() },
                         onSource = { showSourceSheet = true },
-                        onFlash = { /* Flash Toggle if needed */ },
+                        isFlashOn = uiState.isFlashOn,
+                        onFlash = { viewModel.toggleFlash(context) },
                         onChat = { isChatVisible = !isChatVisible },
                         onBg = { showBackgroundSheet = true }
                     )
@@ -301,99 +408,53 @@ fun StudioPreviewScreen(viewModel: MainViewModel) {
         }
     }
 
-    // Reuse Sheets & Dialogs
+    // Background Studio Sheet
     if (showBackgroundSheet) {
-        ModalBottomSheet(onDismissRequest = { showBackgroundSheet = false }, sheetState = bgSheetState) {
-            BackgroundStudioSheet(viewModel = viewModel, onDismiss = { showBackgroundSheet = false })
+        ModalBottomSheet(
+            onDismissRequest = { showBackgroundSheet = false },
+            sheetState = bgSheetState,
+            containerColor = Color(0xFF0F1422)
+        ) {
+            BackgroundStudioSheet(
+                viewModel = viewModel,
+                onDismiss = { showBackgroundSheet = false }
+            )
         }
     }
+
+    // Input Source Sheet
     if (showSourceSheet) {
-        ModalBottomSheet(onDismissRequest = { showSourceSheet = false }, sheetState = sheetState) {
+        ModalBottomSheet(
+            onDismissRequest = { showSourceSheet = false },
+            sheetState = sheetState,
+            containerColor = Color(0xFF0F1422)
+        ) {
             Column(modifier = Modifier.padding(16.dp).padding(bottom = 32.dp)) {
-                Text("INPUT SOURCE", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
+                Text("INPUT SOURCE", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color.White)
                 Spacer(modifier = Modifier.height(16.dp))
-                SourceOptionItem("CAMERA", "Direct broadcast", Icons.Default.CameraAlt, uiState.currentSource == StreamSource.CAMERA) { 
-                    viewModel.toggleSource(StreamSource.CAMERA); showSourceSheet = false 
+                SourceOptionItem("CAMERA", "Direct broadcast camera", Icons.Default.CameraAlt, uiState.currentSource == StreamSource.CAMERA) { 
+                    viewModel.toggleSource(StreamSource.CAMERA)
+                    showSourceSheet = false 
                 }
-                SourceOptionItem("SCREEN", "Capture device display", Icons.Default.Screenshot, uiState.currentSource == StreamSource.SCREEN) { 
-                    viewModel.toggleSource(StreamSource.SCREEN); showSourceSheet = false 
+                SourceOptionItem("SCREEN", "Capture device display", Icons.Default.ScreenShare, uiState.currentSource == StreamSource.SCREEN) { 
+                    viewModel.toggleSource(StreamSource.SCREEN)
+                    showSourceSheet = false 
                 }
-                SourceOptionItem("REMOTE URL", "Restream M3U8/HLS", Icons.Default.Link, uiState.currentSource == StreamSource.M3U8) { 
-                    viewModel.toggleSource(StreamSource.M3U8); showSourceSheet = false; showM3u8Dialog = true 
+                SourceOptionItem("REMOTE URL", "Restream M3U8/HLS stream", Icons.Default.Link, uiState.currentSource == StreamSource.M3U8) { 
+                    viewModel.toggleSource(StreamSource.M3U8)
+                    showSourceSheet = false
+                    showM3u8Dialog = true 
                 }
             }
         }
     }
 
+    // Advanced M3U8 Stream Manager Dialog
     if (showM3u8Dialog) {
-        var url by remember { mutableStateOf(uiState.m3u8Url) }
-        var userAgent by remember { mutableStateOf("") }
-        var referer by remember { mutableStateOf("") }
-        
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showM3u8Dialog = false }) {
-            GlassSectionCard(
-                title = "REMOTE STREAM INGESTION",
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    GlassTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        label = "STREAM URL (M3U8 / HLS / DASH / TS)",
-                        trailingIcon = {
-                            Icon(Icons.Default.Link, null, tint = Color.Cyan.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
-                        }
-                    )
-                    
-                    Text("ADVANCED HTTP HEADERS", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GlassTextField(
-                            value = userAgent,
-                            onValueChange = { userAgent = it },
-                            label = "USER-AGENT",
-                            modifier = Modifier.weight(1f)
-                        )
-                        GlassTextField(
-                            value = referer,
-                            onValueChange = { referer = it },
-                            label = "REFERER",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    
-                    FeatureToggleRow(
-                        title = "REACTION CAMERA OVERLAY",
-                        checked = true,
-                        onCheckedChange = {}
-                    )
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    Button(
-                        onClick = { 
-                            val headers = mutableMapOf<String, String>()
-                            if (userAgent.isNotEmpty()) headers["User-Agent"] = userAgent
-                            if (referer.isNotEmpty()) headers["Referer"] = referer
-                            viewModel.setM3u8Source(url, headers)
-                            showM3u8Dialog = false 
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("INJECT ENGINE", fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-                    }
-                    
-                    TextButton(
-                        onClick = { showM3u8Dialog = false },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text("CANCEL", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
-                    }
-                }
-            }
-        }
+        M3u8StreamManagerDialog(
+            viewModel = viewModel,
+            onDismiss = { showM3u8Dialog = false }
+        )
     }
 }
 
@@ -404,7 +465,7 @@ fun GlassPill(
 ) {
     Surface(
         modifier = Modifier
-            .then(if (glowColor != Color.Transparent) Modifier.shadow(8.dp, CircleShape, ambientColor = glowColor, spotColor = glowColor) else Modifier),
+            .then(if (glowColor != Color.Transparent) Modifier.shadow(10.dp, CircleShape, ambientColor = glowColor, spotColor = glowColor) else Modifier),
         color = Color(0xBF1E2330),
         shape = CircleShape,
         border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
@@ -432,13 +493,24 @@ fun StatPill(icon: ImageVector, text: String) {
 }
 
 @Composable
-fun DualAudioVU(modifier: Modifier = Modifier, isMuted: Boolean) {
+fun DualAudioVU(
+    modifier: Modifier = Modifier,
+    isStreaming: Boolean,
+    isMuted: Boolean,
+    levelL: Float,
+    levelR: Float
+) {
     val barHeight = 160.dp
-    val barWidth = 6.dp
+    // When offline or muted, levels MUST strictly remain at 0% (empty)
+    val actualL = if (!isStreaming || isMuted) 0f else levelL.coerceIn(0f, 1f)
+    val actualR = if (!isStreaming || isMuted) 0f else levelR.coerceIn(0f, 1f)
     
+    val smoothL by animateFloatAsState(targetValue = actualL, animationSpec = tween(50, easing = LinearEasing), label = "VU_L")
+    val smoothR by animateFloatAsState(targetValue = actualR, animationSpec = tween(50, easing = LinearEasing), label = "VU_R")
+
     Surface(
         modifier = modifier
-            .width(42.dp)
+            .width(44.dp)
             .height(barHeight + 40.dp)
             .padding(start = 4.dp),
         color = Color(0xBF1E2330),
@@ -449,42 +521,33 @@ fun DualAudioVU(modifier: Modifier = Modifier, isMuted: Boolean) {
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(vertical = 8.dp)
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("L", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp)
-                Text("R", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("L", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("R", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                VuBar(isMuted)
-                VuBar(isMuted)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                VuBar(level = smoothL)
+                VuBar(level = smoothR)
             }
         }
     }
 }
 
 @Composable
-fun VuBar(isMuted: Boolean) {
+fun VuBar(level: Float) {
     val height = 140.dp
     Box(
         modifier = Modifier
             .width(6.dp)
             .height(height)
-            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+            .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
     ) {
-        if (!isMuted) {
-            // Animated level
-            val level by rememberInfiniteTransition().animateFloat(
-                initialValue = 0.3f,
-                targetValue = 0.9f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(200, easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse
-                )
-            )
+        if (level > 0.005f) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(level)
+                    .fillMaxHeight(level.coerceIn(0.01f, 1f))
                     .align(Alignment.BottomCenter)
                     .background(
                         Brush.verticalGradient(
@@ -522,14 +585,6 @@ fun GlassChat(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun ChatItem(user: String, message: String, color: Color) {
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(user, color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Text(message, color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
-    }
-}
-
-@Composable
 fun GoLiveButton(isStreaming: Boolean, onClick: () -> Unit) {
     val glowColor = if (isStreaming) Color.Gray else Color(0xFFEF4444)
     Button(
@@ -560,6 +615,7 @@ fun ActionGrid(
     onMicToggle: () -> Unit,
     onFlip: () -> Unit,
     onSource: () -> Unit,
+    isFlashOn: Boolean,
     onFlash: () -> Unit,
     onChat: () -> Unit,
     onBg: () -> Unit
@@ -571,11 +627,38 @@ fun ActionGrid(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActionIcon(Icons.Default.VideoLibrary, "SRC", true, Color(0xFFF59E0B), onSource)
-            ActionIcon(Icons.Default.FlashOn, "FLASH", false, Color(0xFFFFD700), onFlash)
+            ActionIcon(Icons.Default.FlashOn, "FLASH", isFlashOn, Color(0xFFFFD700), onFlash)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActionIcon(Icons.Default.ChatBubble, "CHAT", true, Color(0xFFA855F7), onChat)
             ActionIcon(Icons.Default.Image, "BG IMG", true, Color(0xFF34D399), onBg)
+        }
+    }
+}
+
+@Composable
+fun ActionIcon(icon: ImageVector, label: String, active: Boolean, accent: Color, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier
+            .size(height = 54.dp, width = 74.dp)
+            .then(
+                if (active && accent == Color(0xFFFFD700)) Modifier.shadow(8.dp, RoundedCornerShape(12.dp), ambientColor = accent, spotColor = accent)
+                else Modifier
+            ),
+        color = Color(0xBF1E2330),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (active) accent.copy(alpha = 0.8f) else Color.White.copy(alpha = 0.1f)
+        )
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(icon, null, tint = if (active) accent else Color.Gray, modifier = Modifier.size(18.dp))
+            Text(label, color = if (active) Color.White else Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -585,11 +668,13 @@ fun ActionGrid(
 fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
     val uiState by viewModel.uiState.collectAsState()
     val config = uiState.bgConfig
+    val context = LocalContext.current
+    var urlInput by remember { mutableStateOf("") }
     
-    val photoPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
-            uri?.let { viewModel.updateBackgroundConfig(config.copy(imageUri = it.toString())) }
+            uri?.let { viewModel.setBackgroundImageFromUri(context, it) }
         }
     )
 
@@ -600,54 +685,204 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
             .padding(bottom = 32.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        Text("BACKGROUND STUDIO", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
+        Text("BACKGROUND STUDIO", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color.White)
+        Text("PERSISTENT STREAM CANVAS & PiP COMPOSITOR", fontSize = 10.sp, color = Color(0xFF38BDF8))
         Spacer(modifier = Modifier.height(16.dp))
 
         // Image Dropzone / Picker
         Surface(
-            onClick = { photoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onClick = {
+                photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
             color = Color(0xFF0D111C),
             shape = RoundedCornerShape(16.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2A324B).copy(alpha = 0.5f)),
-            modifier = Modifier.fillMaxWidth().height(120.dp)
+            modifier = Modifier.fillMaxWidth().height(110.dp)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(Icons.Default.AddPhotoAlternate, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(32.dp))
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(if (config.imageUri != null) "CHANGE BACKGROUND" else "UPLOAD CANVAS IMAGE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    if (config.imageUri != null) "IMAGE LOADED (TAP TO REPLACE)" else "CHOOSE GALLERY IMAGE (PNG / JPG / WEBP)",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Direct URL Input
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            GlassTextField(
+                value = urlInput,
+                onValueChange = { urlInput = it },
+                label = "DIRECT IMAGE URL",
+                modifier = Modifier.weight(1f)
+            )
+            Button(
+                onClick = {
+                    if (urlInput.isNotBlank()) {
+                        viewModel.setBackgroundImageFromUrl(context, urlInput.trim())
+                    }
+                },
+                modifier = Modifier.height(44.dp).padding(top = 16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("LOAD", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
 
         if (config.imageUri != null) {
             Spacer(modifier = Modifier.height(8.dp))
-            TextButton(onClick = { viewModel.updateBackgroundConfig(config.copy(imageUri = null)) }, modifier = Modifier.align(Alignment.End)) {
-                Text("REMOVE BACKGROUND", color = Color(0xFFEF4444), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("PERSISTENT ON STORAGE", color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                TextButton(
+                    onClick = { viewModel.removeBackground(context) },
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("REMOVE / RESET BACKGROUND", color = Color(0xFFEF4444), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Interactive Preview Card with Touch Gesture (Drag & Pinch to Zoom)
+        if (config.imageUri != null) {
+            GlassSectionCard(title = "INTERACTIVE CANVAS PREVIEW (DRAG & PINCH)") {
+                val file = File(config.imageUri)
+                val bitmap = remember(config.imageUri) {
+                    if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+                }
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black)
+                        .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                val newZoom = (config.zoom * zoom).coerceIn(0.5f, 2.0f)
+                                val newX = (config.offsetX + pan.x * 0.1f).coerceIn(-50f, 50f)
+                                val newY = (config.offsetY + pan.y * 0.1f).coerceIn(-50f, 50f)
+                                viewModel.updateBackgroundConfig(
+                                    config.copy(zoom = newZoom, offsetX = newX, offsetY = newY)
+                                )
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Preview",
+                            contentScale = when (config.scaleMode) {
+                                MainViewModel.BackgroundScaleMode.COVER -> ContentScale.Crop
+                                MainViewModel.BackgroundScaleMode.CONTAIN -> ContentScale.Fit
+                                MainViewModel.BackgroundScaleMode.STRETCH -> ContentScale.FillBounds
+                                MainViewModel.BackgroundScaleMode.TOP_BANNER -> ContentScale.FillWidth
+                                MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> ContentScale.FillWidth
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Text(
+                        "Touch to Pan / Pinch to Zoom",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 6.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         // Layer Modes & Controls
         GlassSectionCard(title = "CANVAS CONTROLS") {
-            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 // Scale Mode
                 Column {
-                    Text("SCALE MODE", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("PRESET LAYOUT MODE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
                     PillSelector(
-                        options = MainViewModel.BackgroundScaleMode.entries.map { it.name },
-                        selectedIndex = MainViewModel.BackgroundScaleMode.entries.indexOf(config.scaleMode),
+                        options = listOf("Cover", "Contain", "Top Banner", "Bottom", "Stretch"),
+                        selectedIndex = when (config.scaleMode) {
+                            MainViewModel.BackgroundScaleMode.COVER -> 0
+                            MainViewModel.BackgroundScaleMode.CONTAIN -> 1
+                            MainViewModel.BackgroundScaleMode.TOP_BANNER -> 2
+                            MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> 3
+                            MainViewModel.BackgroundScaleMode.STRETCH -> 4
+                        },
                         onSelect = { index ->
-                            viewModel.updateBackgroundConfig(config.copy(scaleMode = MainViewModel.BackgroundScaleMode.entries[index]))
+                            val mode = when (index) {
+                                0 -> MainViewModel.BackgroundScaleMode.COVER
+                                1 -> MainViewModel.BackgroundScaleMode.CONTAIN
+                                2 -> MainViewModel.BackgroundScaleMode.TOP_BANNER
+                                3 -> MainViewModel.BackgroundScaleMode.BOTTOM_BANNER
+                                else -> MainViewModel.BackgroundScaleMode.STRETCH
+                            }
+                            viewModel.updateBackgroundConfig(config.copy(scaleMode = mode))
                         }
                     )
+                }
+
+                // Zoom Slider
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("ZOOM / SCALE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${(config.zoom * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    GlowingSlider(
+                        value = config.zoom,
+                        onValueChange = { viewModel.updateBackgroundConfig(config.copy(zoom = it)) },
+                        valueRange = 0.5f..2.0f
+                    )
+                }
+
+                // X & Y Offset Sliders
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("X OFFSET", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("${config.offsetX.toInt()}", color = Color(0xFF818CF8), fontSize = 10.sp)
+                        }
+                        GlowingSlider(
+                            value = config.offsetX,
+                            onValueChange = { viewModel.updateBackgroundConfig(config.copy(offsetX = it)) },
+                            valueRange = -50f..50f
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Y OFFSET", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("${config.offsetY.toInt()}", color = Color(0xFF818CF8), fontSize = 10.sp)
+                        }
+                        GlowingSlider(
+                            value = config.offsetY,
+                            onValueChange = { viewModel.updateBackgroundConfig(config.copy(offsetY = it)) },
+                            valueRange = -50f..50f
+                        )
+                    }
                 }
 
                 // Blur Slider
                 Column {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("GAUSSIAN BLUR", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${config.blurRadius.toInt()}px", color = Color(0xFF38BDF8), fontSize = 11.sp)
+                        Text("GAUSSIAN BLUR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${config.blurRadius.toInt()}px", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     GlowingSlider(
                         value = config.blurRadius,
@@ -659,12 +894,25 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 // Brightness Slider
                 Column {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("CANVAS BRIGHTNESS", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${(config.brightness * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp)
+                        Text("CANVAS BRIGHTNESS", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${(config.brightness * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     GlowingSlider(
                         value = config.brightness,
                         onValueChange = { viewModel.updateBackgroundConfig(config.copy(brightness = it)) },
+                        valueRange = 0.1f..1f
+                    )
+                }
+
+                // Opacity Slider
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("CANVAS OPACITY", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${(config.opacity * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    GlowingSlider(
+                        value = config.opacity,
+                        onValueChange = { viewModel.updateBackgroundConfig(config.copy(opacity = it)) },
                         valueRange = 0.1f..1f
                     )
                 }
@@ -677,8 +925,8 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
         GlassSectionCard(title = "FOREGROUND VIDEO PiP") {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("VIDEO SCALE", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Text("${(config.foregroundScale * 100).toInt()}%", color = Color(0xFF818CF8), fontSize = 11.sp)
+                    Text("VIDEO SCALE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("${(config.foregroundScale * 100).toInt()}%", color = Color(0xFF818CF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
                 GlowingSlider(
                     value = config.foregroundScale,
@@ -686,8 +934,28 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                     valueRange = 0.5f..1f
                 )
 
+                Text("VIDEO POSITION", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                PillSelector(
+                    options = listOf("Center", "Top", "Bottom", "Free"),
+                    selectedIndex = when (config.foregroundPosition) {
+                        MainViewModel.ForegroundPosition.CENTER -> 0
+                        MainViewModel.ForegroundPosition.TOP -> 1
+                        MainViewModel.ForegroundPosition.BOTTOM -> 2
+                        MainViewModel.ForegroundPosition.FREE -> 3
+                    },
+                    onSelect = { index ->
+                        val pos = when (index) {
+                            0 -> MainViewModel.ForegroundPosition.CENTER
+                            1 -> MainViewModel.ForegroundPosition.TOP
+                            2 -> MainViewModel.ForegroundPosition.BOTTOM
+                            else -> MainViewModel.ForegroundPosition.FREE
+                        }
+                        viewModel.updateBackgroundConfig(config.copy(foregroundPosition = pos))
+                    }
+                )
+
                 FeatureToggleRow(
-                    title = "BRB / PAUSE SHIELD",
+                    title = "BRB / PAUSE SHIELD OVERLAY",
                     checked = config.isPauseShieldActive,
                     onCheckedChange = { viewModel.updateBackgroundConfig(config.copy(isPauseShieldActive = it)) }
                 )
@@ -707,21 +975,311 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
-fun ActionIcon(icon: ImageVector, label: String, active: Boolean, accent: Color, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.size(height = 54.dp, width = 74.dp),
-        color = Color(0xBF1E2330),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (active) accent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.1f))
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+fun M3u8StreamManagerDialog(viewModel: MainViewModel, onDismiss: () -> Unit) {
+    val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    
+    var url by remember { mutableStateOf(uiState.m3u8Url) }
+    var userAgent by remember { mutableStateOf(uiState.m3u8Headers["User-Agent"] ?: "") }
+    var referer by remember { mutableStateOf(uiState.m3u8Headers["Referer"] ?: "") }
+    var origin by remember { mutableStateOf(uiState.m3u8Headers["Origin"] ?: "") }
+    var streamNameToSave by remember { mutableStateOf("") }
+    
+    // ExoPlayer test preview state
+    var isTestingPlayback by remember { mutableStateOf(false) }
+    var playerStatusText by remember { mutableStateOf("IDLE") }
+    
+    val testPlayer = remember {
+        ExoPlayer.Builder(context).build()
+    }
+    
+    DisposableEffect(testPlayer) {
+        onDispose {
+            testPlayer.release()
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            color = Color(0xFF0F1422),
+            shape = RoundedCornerShape(18.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2A324B)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f)
+                .padding(vertical = 12.dp)
         ) {
-            Icon(icon, null, tint = if (active) accent else Color.Gray, modifier = Modifier.size(18.dp))
-            Text(label, color = if (active) Color.White else Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("ADVANCED M3U8 MANAGER", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                        Text("HLS INGESTION & PLAYLIST REPOSITORY", color = Color(0xFF38BDF8), fontSize = 10.sp)
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, null, tint = Color.Gray)
+                    }
+                }
+
+                // Live Test Player Window
+                if (isTestingPlayback) {
+                    Surface(
+                        color = Color.Black,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .border(1.dp, Color(0xFF10B981), RoundedCornerShape(12.dp))
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                PlayerView(ctx).apply {
+                                    player = testPlayer
+                                    useController = true
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+
+                // Player Controls & Status
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (isTestingPlayback) Color(0xFF10B981) else Color.Gray)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(playerStatusText, color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            if (isTestingPlayback) {
+                                testPlayer.stop()
+                                isTestingPlayback = false
+                                playerStatusText = "STOPPED"
+                            } else {
+                                if (url.isBlank()) {
+                                    Toast.makeText(context, "Please enter a valid M3U8 URL", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
+                                val headers = mutableMapOf<String, String>()
+                                if (userAgent.isNotBlank()) headers["User-Agent"] = userAgent
+                                if (referer.isNotBlank()) headers["Referer"] = referer
+                                if (origin.isNotBlank()) headers["Origin"] = origin
+                                
+                                val dataSourceFactory = DefaultHttpDataSource.Factory()
+                                    .setUserAgent(if (userAgent.isNotBlank()) userAgent else "LiveStreamPro/1.0")
+                                    .setDefaultRequestProperties(headers)
+                                    .setAllowCrossProtocolRedirects(true)
+                                
+                                val mediaSource = HlsMediaSource.Factory(dataSourceFactory)
+                                    .createMediaSource(MediaItem.fromUri(url.trim()))
+                                
+                                testPlayer.addListener(object : Player.Listener {
+                                    override fun onPlaybackStateChanged(state: Int) {
+                                        playerStatusText = when (state) {
+                                            Player.STATE_BUFFERING -> "BUFFERING..."
+                                            Player.STATE_READY -> "PLAYING (OK)"
+                                            Player.STATE_ENDED -> "ENDED"
+                                            else -> "IDLE"
+                                        }
+                                    }
+                                })
+                                testPlayer.setMediaSource(mediaSource)
+                                testPlayer.prepare()
+                                testPlayer.playWhenReady = true
+                                isTestingPlayback = true
+                                playerStatusText = "CONNECTING..."
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isTestingPlayback) Color(0xFFEF4444) else Color(0xFF10B981)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(if (isTestingPlayback) Icons.Default.Stop else Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (isTestingPlayback) "STOP TEST" else "TEST PREVIEW", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Sample Streams Pills
+                Column {
+                    Text("WORKING SAMPLE STREAMS (TAP TO LOAD)", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Surface(
+                            onClick = { url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" },
+                            color = Color(0x3338BDF8),
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Big Buck Bunny", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
+                        }
+                        Surface(
+                            onClick = { url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8" },
+                            color = Color(0x33818CF8),
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Akamai Live", color = Color(0xFF818CF8), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
+                        }
+                        Surface(
+                            onClick = { url = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8" },
+                            color = Color(0x3334D399),
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Tears of Steel", color = Color(0xFF34D399), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
+                        }
+                    }
+                }
+
+                // Stream URL Input
+                GlassTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = "STREAM URL (M3U8 / HLS / DASH / TS)",
+                    trailingIcon = {
+                        IconButton(onClick = { url = "" }) {
+                            Icon(Icons.Default.Clear, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                )
+
+                // Advanced HTTP Headers
+                Text("ADVANCED HTTP HEADERS", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GlassTextField(
+                        value = userAgent,
+                        onValueChange = { userAgent = it },
+                        label = "USER-AGENT",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GlassTextField(
+                        value = referer,
+                        onValueChange = { referer = it },
+                        label = "REFERER",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                GlassTextField(
+                    value = origin,
+                    onValueChange = { origin = it },
+                    label = "ORIGIN HEADER"
+                )
+
+                // Saved Playlist Section
+                Text("SAVED STREAMS PLAYLIST", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    uiState.savedStreams.forEach { stream ->
+                        Surface(
+                            color = Color(0xFF131A2A),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f).clickable { url = stream.url }) {
+                                    Text(stream.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(stream.url, color = Color.Gray, fontSize = 10.sp, maxLines = 1)
+                                }
+                                IconButton(
+                                    onClick = { viewModel.deleteStream(stream.id) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Delete, null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    // Save New Stream Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        GlassTextField(
+                            value = streamNameToSave,
+                            onValueChange = { streamNameToSave = it },
+                            label = "SAVE CURRENT TO PLAYLIST (NAME)",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = {
+                                if (streamNameToSave.isNotBlank() && url.isNotBlank()) {
+                                    viewModel.saveStream(streamNameToSave, url)
+                                    streamNameToSave = ""
+                                    Toast.makeText(context, "Stream saved to playlist!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.height(44.dp).padding(top = 16.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("SAVE", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Action Buttons
+                Button(
+                    onClick = {
+                        testPlayer.stop()
+                        val headers = mutableMapOf<String, String>()
+                        if (userAgent.isNotEmpty()) headers["User-Agent"] = userAgent
+                        if (referer.isNotEmpty()) headers["Referer"] = referer
+                        if (origin.isNotEmpty()) headers["Origin"] = origin
+                        viewModel.setM3u8Source(url, headers)
+                        viewModel.toggleSource(StreamSource.M3U8)
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("INJECT TO BROADCAST ENGINE", fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                }
+
+                TextButton(
+                    onClick = {
+                        testPlayer.stop()
+                        onDismiss()
+                    },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Text("CANCEL", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                }
+            }
         }
     }
 }
@@ -731,30 +1289,6 @@ fun formatTime(seconds: Long): String {
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return String.format("%02d:%02d:%02d", h, m, s)
-}
-
-@Composable
-fun HudStatRow(icon: ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(text, color = Color.White, fontSize = 12.sp)
-    }
-}
-
-@Composable
-fun ControlButton(icon: ImageVector, label: String, active: Boolean = true, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(
-            onClick = onClick,
-            colors = IconButtonDefaults.iconButtonColors(
-                contentColor = if (active) MaterialTheme.colorScheme.primary else Color.Gray
-            )
-        ) {
-            Icon(icon, contentDescription = label)
-        }
-        Text(label, fontSize = 10.sp, color = Color.Gray)
-    }
 }
 
 @Composable

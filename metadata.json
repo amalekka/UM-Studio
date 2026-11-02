@@ -1,6 +1,6 @@
 {
-  "name": "LiveStream Pro",
-  "description": "Professional multi-platform live streaming and restreaming application with RTMP/SRT support.",
+  "name": "UM Studio",
+  "description": "UM Studio - Professional multi-platform live streaming application with RTMP/SRT support.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
