@@ -17,9 +17,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
-      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
-      KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD != '' && secrets.STORE_PASSWORD || 'android' }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD != '' && secrets.KEY_PASSWORD || 'android' }}
+      KEY_ALIAS: "upload"
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:+UseG1GC' -Dorg.gradle.workers.max=2"
 
     steps:
       - name: Checkout Code
@@ -30,18 +31,19 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
 
       - name: Setup Gradle 9.3.1 (Required by AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '9.3.1'
+          cache-disabled: false
 
       - name: Make Gradle Wrapper Executable
         run: chmod +x gradlew || true
 
       - name: Prepare Build Environment & Keystores
         run: |
+          set -e
           # 1. Create .env file for secrets gradle plugin
           if [ -f ".env.example" ]; then
             cp .env.example .env
@@ -57,7 +59,7 @@ jobs:
             cp -f debug.keystore app/debug.keystore 2>/dev/null || true
           fi
 
-          # 3. Ensure a release keystore exists in root and app module
+          # 3. Ensure a release upload keystore exists in root and app module
           if [ ! -f "my-upload-key.jks" ]; then
             echo "Generating fallback upload keystore for release build..."
             keytool -genkey -v \
@@ -72,11 +74,22 @@ jobs:
           fi
           cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Build Release APK
-        run: ./gradlew assembleRelease -x lintVitalAnalyzeRelease --stacktrace
+      - name: Build Debug & Release APKs
+        env:
+          KEYSTORE_PATH: "${{ github.workspace }}/my-upload-key.jks"
+          STORE_PASSWORD: "android"
+          KEY_PASSWORD: "android"
+        run: |
+          ./gradlew assembleDebug assembleRelease \
+            --no-daemon \
+            --no-configuration-cache \
+            --max-workers=2 \
+            -x lint \
+            -x lintVitalRelease \
+            -x lintVitalReportRelease \
+            -x lintVitalAnalyzeRelease \
+            -x test \
+            --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
