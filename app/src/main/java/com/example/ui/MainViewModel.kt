@@ -67,8 +67,13 @@ class MainViewModel : ViewModel() {
         val isChatVisible: Boolean = true
     )
 
+    private var pendingView: OpenGlView? = null
+
     fun onServiceConnected(service: LiveStreamService) {
         this.service = service
+        pendingView?.let { view ->
+            initPreview(view)
+        }
         viewModelScope.launch {
             service.getStreamManager()?.let { manager ->
                 launch { manager.status.collect { status -> 
@@ -117,9 +122,10 @@ class MainViewModel : ViewModel() {
     }
 
     fun initPreview(view: OpenGlView) {
+        pendingView = view
         service?.getStreamManager()?.let { manager ->
+            manager.setConfig(_uiState.value.streamConfig)
             manager.initCamera(view)
-            manager.startPreview()
         }
     }
 
@@ -153,6 +159,7 @@ class MainViewModel : ViewModel() {
     }
 
     fun stopPreview() {
+        pendingView = null
         service?.getStreamManager()?.stopPreview()
     }
 
@@ -165,6 +172,7 @@ class MainViewModel : ViewModel() {
 
     fun updateConfig(config: StreamConfig) {
         _uiState.value = _uiState.value.copy(streamConfig = config)
+        service?.getStreamManager()?.setConfig(config)
     }
 
     fun updateEndpoints(endpoints: List<PlatformEndpoint>) {

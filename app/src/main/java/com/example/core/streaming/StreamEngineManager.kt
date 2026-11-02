@@ -54,7 +54,7 @@ class StreamEngineManager(
     private val _bitrate = MutableStateFlow(0)
     val bitrate: StateFlow<Int> = _bitrate
 
-    private var currentConfig: StreamConfig? = null
+    private var currentConfig: StreamConfig = StreamConfig()
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
@@ -62,6 +62,10 @@ class StreamEngineManager(
 
     init {
         rtmpDisplay = RtmpDisplay(context, true, connectChecker)
+    }
+
+    fun setConfig(config: StreamConfig) {
+        currentConfig = config
     }
 
     fun getGlInterface() = if (currentSource == StreamSource.CAMERA) {
@@ -115,25 +119,36 @@ class StreamEngineManager(
         if (rtmpCamera2 == null) {
             rtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
         } else {
-            rtmpCamera2?.replaceView(openGlView)
+            try {
+                rtmpCamera2?.replaceView(openGlView)
+            } catch (e: Exception) {
+                Log.e("StreamEngine", "Failed to replace view: ${e.message}")
+            }
         }
+        startPreview()
     }
 
     fun setPreviewView(openGlView: OpenGlView?) {
-        if (isReleased) return
-        rtmpCamera2?.replaceView(openGlView)
+        if (isReleased || openGlView == null) return
+        try {
+            rtmpCamera2?.replaceView(openGlView)
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Failed to set preview view: ${e.message}")
+        }
     }
 
     fun setSource(source: StreamSource) {
         currentSource = source
     }
 
-    fun startPreview() {
+    fun startPreview(w: Int = 0, h: Int = 0) {
         if (isReleased) return
-        // We almost always want the GL engine running even for M3U8 to show filters
         if (rtmpCamera2?.isOnPreview == false) {
             try {
-                rtmpCamera2?.startPreview()
+                val (defaultW, defaultH) = calculateResolution(currentConfig.videoQuality, currentConfig.aspectRatio)
+                val targetW = if (w > 0) w else defaultW
+                val targetH = if (h > 0) h else defaultH
+                rtmpCamera2?.startPreview(targetW, targetH)
             } catch (e: Exception) {
                 Log.e("StreamEngine", "Failed to start preview", e)
             }
@@ -143,11 +158,8 @@ class StreamEngineManager(
     fun stopPreview() {
         if (isReleased) return
         try {
-            clearFilters()
-            // Detach the view FIRST to signal to the library that the surface is gone
-            rtmpCamera2?.replaceView(null as OpenGlView?)
-            
-            // Only stop preview if we are NOT streaming.
+            // Only stop preview if we are NOT streaming and preview is active.
+            // Do NOT call replaceView(null) as that forcibly destroys the GL context prematurely.
             if (rtmpCamera2?.isStreaming == false && rtmpCamera2?.isOnPreview == true) {
                 rtmpCamera2?.stopPreview()
             }
