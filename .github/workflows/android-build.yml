@@ -13,13 +13,10 @@ concurrency:
 
 jobs:
   build:
-    name: Build & Package APKs
+    name: Build & Package Release APK
     runs-on: ubuntu-latest
 
     env:
-      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD != '' && secrets.STORE_PASSWORD || 'android' }}
-      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD != '' && secrets.KEY_PASSWORD || 'android' }}
-      KEY_ALIAS: ${{ secrets.KEY_ALIAS != '' && secrets.KEY_ALIAS || 'upload' }}
       GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:+UseG1GC' -Dorg.gradle.workers.max=2"
 
     steps:
@@ -41,61 +38,59 @@ jobs:
       - name: Make Gradle Wrapper Executable
         run: chmod +x gradlew || true
 
-      - name: Prepare Build Environment & Keystores
+      - name: Prepare Keystore & Environment
         run: |
           set -e
           # 1. Create .env file for secrets gradle plugin
+          touch .env
           if [ -f ".env.example" ]; then
             cp .env.example .env
-          else
-            touch .env
           fi
 
-          # 2. Decode debug keystore if base64 file exists
-          if [ -f "debug.keystore.base64" ]; then
-            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || true
-          fi
-          if [ -f "debug.keystore" ]; then
-            cp -f debug.keystore app/debug.keystore 2>/dev/null || true
+          # 2. Extract passwords safely without boolean coercion
+          SP="${{ secrets.STORE_PASSWORD }}"
+          if [ -z "$SP" ]; then
+            SP="android"
           fi
 
-          # 3. Ensure a release upload keystore exists in root and app module
+          KP="${{ secrets.KEY_PASSWORD }}"
+          if [ -z "$KP" ]; then
+            KP="android"
+          fi
+
+          # 3. Check if release keystore exists and is valid with password
+          if [ -f "my-upload-key.jks" ]; then
+            if ! keytool -list -keystore my-upload-key.jks -storepass "$SP" >/dev/null 2>&1; then
+              echo "Existing keystore cannot be read with provided storepass. Recreating..."
+              rm -f my-upload-key.jks app/my-upload-key.jks
+            fi
+          fi
+
+          # 4. Generate fallback upload keystore if needed
           if [ ! -f "my-upload-key.jks" ]; then
-            echo "Generating fallback upload keystore for release build..."
+            echo "Generating release upload keystore..."
             keytool -genkey -v \
               -keystore my-upload-key.jks \
-              -alias "${KEY_ALIAS}" \
+              -alias upload \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \
-              -storepass "${STORE_PASSWORD}" \
-              -keypass "${KEY_PASSWORD}" \
+              -storepass "$SP" \
+              -keypass "$KP" \
               -dname "CN=LiveStreamPro,O=AIStudio,C=US"
           fi
+
+          # Copy to app module as well
           cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
 
-          # 4. Export environment variables for subsequent steps
+          # 5. Export environment variables to GITHUB_ENV
           echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> $GITHUB_ENV
-          echo "STORE_PASSWORD=${STORE_PASSWORD}" >> $GITHUB_ENV
-          echo "KEY_PASSWORD=${KEY_PASSWORD}" >> $GITHUB_ENV
-          echo "KEY_ALIAS=${KEY_ALIAS}" >> $GITHUB_ENV
+          echo "STORE_PASSWORD=${SP}" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=${KP}" >> $GITHUB_ENV
 
-      - name: Build Debug & Release APKs
-        env:
-          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD != '' && secrets.STORE_PASSWORD || 'android' }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD != '' && secrets.KEY_PASSWORD || 'android' }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS != '' && secrets.KEY_ALIAS || 'upload' }}
+      - name: Build Release APK
         run: |
-          ./gradlew assembleDebug assembleRelease --stacktrace
-
-      - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: livestream-pro-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14
+          ./gradlew assembleRelease --stacktrace
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
