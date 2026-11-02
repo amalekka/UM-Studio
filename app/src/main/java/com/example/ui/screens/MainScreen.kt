@@ -1643,176 +1643,228 @@ fun M3u8ControlDock(
     modifier: Modifier = Modifier
 ) {
     var expandedDropdown by remember { mutableStateOf(false) }
+    var isDockCollapsed by remember { mutableStateOf(true) }
 
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = Color(0xF20D1322),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
-        shadowElevation = 8.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+    val statusColor = when (uiState.m3u8State) {
+        MainViewModel.M3u8PlaybackState.PLAYING -> Color(0xFF10B981)
+        MainViewModel.M3u8PlaybackState.PAUSED -> Color(0xFFF59E0B)
+        MainViewModel.M3u8PlaybackState.STOPPED -> Color(0xFFEF4444)
+    }
+
+    if (isDockCollapsed) {
+        // Sleek floating frosted-glass tab docked on the left edge
+        Surface(
+            onClick = { isDockCollapsed = false },
+            modifier = modifier.padding(start = 0.dp),
+            color = Color(0xF20D1322),
+            shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
+            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
+            shadowElevation = 8.dp
         ) {
-            // Header Row: Status Indicator, Stream Name, Quick Switch Dropdown
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(statusColor, CircleShape)
+                )
+                Text(
+                    text = "▶ M3U8",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Icon(
+                    Icons.Default.ChevronRight,
+                    null,
+                    tint = Color(0xFF38BDF8),
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    } else {
+        // Full M3U8 Control Dock
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            color = Color(0xF20D1322),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
+            shadowElevation = 8.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Header Row: Collapse Button, Status Indicator, Stream Name, Quick Switch Dropdown
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val statusColor = when (uiState.m3u8State) {
-                        MainViewModel.M3u8PlaybackState.PLAYING -> Color(0xFF10B981)
-                        MainViewModel.M3u8PlaybackState.PAUSED -> Color(0xFFF59E0B)
-                        MainViewModel.M3u8PlaybackState.STOPPED -> Color(0xFFEF4444)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(statusColor, CircleShape)
-                    )
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "M3U8 / HLS DOCK: ",
-                                color = Color.White.copy(alpha = 0.5f),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                uiState.m3u8State.name,
-                                color = statusColor,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Black
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Collapse Button (◀)
+                        IconButton(
+                            onClick = { isDockCollapsed = true },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronLeft,
+                                "Collapse Dock",
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(18.dp)
                             )
                         }
-                        Text(
-                            uiState.activeM3u8Name,
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(statusColor, CircleShape)
+                        )
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "M3U8 / HLS DOCK: ",
+                                    color = Color.White.copy(alpha = 0.5f),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    uiState.m3u8State.name,
+                                    color = statusColor,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+                            Text(
+                                uiState.activeM3u8Name,
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    // Dropdown to switch saved streams quickly without opening dialog
+                    Box {
+                        Surface(
+                            onClick = { expandedDropdown = true },
+                            color = Color(0x3338BDF8),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text("SWITCH", color = Color(0xFF38BDF8), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(14.dp))
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = expandedDropdown,
+                            onDismissRequest = { expandedDropdown = false },
+                            modifier = Modifier.background(Color(0xFF0F1422))
+                        ) {
+                            uiState.savedStreams.forEach { stream ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(stream.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text(stream.url, color = Color.Gray, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    },
+                                    onClick = {
+                                        expandedDropdown = false
+                                        viewModel.selectSavedStream(stream)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Action Row: Play/Pause, HARD STOP, Mute, Advanced Dialog
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Play / Pause
+                    if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PLAYING) {
+                        Button(
+                            onClick = { viewModel.pauseM3u8() },
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                            Icon(Icons.Default.Pause, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("PAUSE", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        }
+                    } else {
+                        Button(
+                            onClick = { viewModel.resumeM3u8() },
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PAUSED) "RESUME" else "PLAY", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        }
+                    }
+
+                    // HARD STOP Button (Kills audio and connection)
+                    Button(
+                        onClick = { viewModel.stopM3u8Stream() },
+                        modifier = Modifier.weight(1.2f).height(38.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("HARD STOP", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+
+                    // Mute / Unmute
+                    IconButton(
+                        onClick = { viewModel.toggleM3u8Mute() },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(if (uiState.isM3u8Muted) Color(0x33EF4444) else Color(0x3338BDF8), RoundedCornerShape(8.dp))
+                    ) {
+                        Icon(
+                            if (uiState.isM3u8Muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            null,
+                            tint = if (uiState.isM3u8Muted) Color(0xFFEF4444) else Color(0xFF38BDF8),
+                            modifier = Modifier.size(18.dp)
                         )
                     }
-                }
 
-                // Dropdown to switch saved streams quickly without opening dialog
-                Box {
-                    Surface(
-                        onClick = { expandedDropdown = true },
-                        color = Color(0x3338BDF8),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f))
+                    // Manage M3U8 & Streams Screen
+                    IconButton(
+                        onClick = onOpenManager,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(Color(0x33818CF8), RoundedCornerShape(8.dp))
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text("SWITCH", color = Color(0xFF38BDF8), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(14.dp))
-                        }
+                        Icon(Icons.Default.Dns, "Manage M3U8 Streams", tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
                     }
-
-                    DropdownMenu(
-                        expanded = expandedDropdown,
-                        onDismissRequest = { expandedDropdown = false },
-                        modifier = Modifier.background(Color(0xFF0F1422))
-                    ) {
-                        uiState.savedStreams.forEach { stream ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(stream.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        Text(stream.url, color = Color.Gray, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
-                                },
-                                onClick = {
-                                    expandedDropdown = false
-                                    viewModel.selectSavedStream(stream)
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Action Row: Play/Pause, HARD STOP, Mute, Advanced Dialog
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Play / Pause
-                if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PLAYING) {
-                    Button(
-                        onClick = { viewModel.pauseM3u8() },
-                        modifier = Modifier.weight(1f).height(38.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.Pause, null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("PAUSE", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                    }
-                } else {
-                    Button(
-                        onClick = { viewModel.resumeM3u8() },
-                        modifier = Modifier.weight(1f).height(38.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PAUSED) "RESUME" else "PLAY", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                    }
-                }
-
-                // HARD STOP Button (Kills audio and connection)
-                Button(
-                    onClick = { viewModel.stopM3u8Stream() },
-                    modifier = Modifier.weight(1.2f).height(38.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp)
-                ) {
-                    Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("HARD STOP", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                }
-
-                // Mute / Unmute
-                IconButton(
-                    onClick = { viewModel.toggleM3u8Mute() },
-                    modifier = Modifier
-                        .size(38.dp)
-                        .background(if (uiState.isM3u8Muted) Color(0x33EF4444) else Color(0x3338BDF8), RoundedCornerShape(8.dp))
-                ) {
-                    Icon(
-                        if (uiState.isM3u8Muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                        null,
-                        tint = if (uiState.isM3u8Muted) Color(0xFFEF4444) else Color(0xFF38BDF8),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                // Manage M3U8 & Streams Screen
-                IconButton(
-                    onClick = onOpenManager,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .background(Color(0x33818CF8), RoundedCornerShape(8.dp))
-                ) {
-                    Icon(Icons.Default.Dns, "Manage M3U8 Streams", tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
                 }
             }
         }

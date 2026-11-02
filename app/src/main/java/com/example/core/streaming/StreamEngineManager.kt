@@ -234,8 +234,6 @@ class StreamEngineManager(
     fun stopPreview() {
         if (isReleased) return
         try {
-            // Only stop preview if we are NOT streaming and preview is active.
-            // Do NOT call replaceView(null) as that forcibly destroys the GL context prematurely.
             if (rtmpCamera2?.isStreaming == false && rtmpCamera2?.isOnPreview == true) {
                 rtmpCamera2?.stopPreview()
             }
