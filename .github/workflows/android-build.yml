@@ -19,7 +19,7 @@ jobs:
     env:
       STORE_PASSWORD: ${{ secrets.STORE_PASSWORD != '' && secrets.STORE_PASSWORD || 'android' }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD != '' && secrets.KEY_PASSWORD || 'android' }}
-      KEY_ALIAS: "upload"
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS != '' && secrets.KEY_ALIAS || 'upload' }}
       GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:+UseG1GC' -Dorg.gradle.workers.max=2"
 
     steps:
@@ -64,32 +64,30 @@ jobs:
             echo "Generating fallback upload keystore for release build..."
             keytool -genkey -v \
               -keystore my-upload-key.jks \
-              -alias upload \
+              -alias "${KEY_ALIAS}" \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \
-              -storepass android \
-              -keypass android \
+              -storepass "${STORE_PASSWORD}" \
+              -keypass "${KEY_PASSWORD}" \
               -dname "CN=LiveStreamPro,O=AIStudio,C=US"
           fi
           cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
 
+          # 4. Export environment variables for subsequent steps
+          echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> $GITHUB_ENV
+          echo "STORE_PASSWORD=${STORE_PASSWORD}" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=${KEY_PASSWORD}" >> $GITHUB_ENV
+          echo "KEY_ALIAS=${KEY_ALIAS}" >> $GITHUB_ENV
+
       - name: Build Debug & Release APKs
         env:
-          KEYSTORE_PATH: "${{ github.workspace }}/my-upload-key.jks"
-          STORE_PASSWORD: "android"
-          KEY_PASSWORD: "android"
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD != '' && secrets.STORE_PASSWORD || 'android' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD != '' && secrets.KEY_PASSWORD || 'android' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS != '' && secrets.KEY_ALIAS || 'upload' }}
         run: |
-          ./gradlew assembleDebug assembleRelease \
-            --no-daemon \
-            --no-configuration-cache \
-            --max-workers=2 \
-            -x lint \
-            -x lintVitalRelease \
-            -x lintVitalReportRelease \
-            -x lintVitalAnalyzeRelease \
-            -x test \
-            --stacktrace
+          ./gradlew assembleDebug assembleRelease --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
