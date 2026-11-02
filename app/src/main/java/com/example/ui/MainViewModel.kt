@@ -35,8 +35,12 @@ class MainViewModel : ViewModel() {
 
     private var service: LiveStreamService? = null
 
+    enum class M3u8PlaybackState { STOPPED, PLAYING, PAUSED }
+    enum class ImageDisplayMode { FULL_IMAGE, PIP_OVERLAY, OFF }
+
     data class BackgroundConfig(
         val imageUri: String? = null,
+        val displayMode: ImageDisplayMode = ImageDisplayMode.FULL_IMAGE,
         val blurRadius: Float = 0f,
         val brightness: Float = 1f,
         val opacity: Float = 1f,
@@ -55,7 +59,9 @@ class MainViewModel : ViewModel() {
     data class SavedStreamItem(
         val id: String = UUID.randomUUID().toString(),
         val name: String,
-        val url: String
+        val url: String,
+        val userAgent: String = "",
+        val referer: String = ""
     )
 
     data class UiState(
@@ -76,6 +82,11 @@ class MainViewModel : ViewModel() {
         ),
         val m3u8Url: String = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
         val m3u8Headers: Map<String, String> = emptyMap(),
+        val m3u8State: M3u8PlaybackState = M3u8PlaybackState.STOPPED,
+        val isM3u8Muted: Boolean = false,
+        val m3u8Volume: Float = 1.0f,
+        val activeM3u8Name: String = "Big Buck Bunny HLS",
+        val showScreenCapturePrompt: Boolean = false,
         val savedStreams: List<SavedStreamItem> = listOf(
             SavedStreamItem(name = "Big Buck Bunny HLS", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
             SavedStreamItem(name = "Akamai Live HLS", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"),
@@ -292,7 +303,7 @@ class MainViewModel : ViewModel() {
 
     fun stopStream() {
         service?.getStreamManager()?.stopStream()
-        service?.getRestreamEngine()?.stop()
+        stopM3u8Stream()
         stopTimer()
         _uiState.value = _uiState.value.copy(
             isStreaming = false,
@@ -306,9 +317,79 @@ class MainViewModel : ViewModel() {
     }
 
     fun toggleSource(source: StreamSource) {
-        _uiState.value = _uiState.value.copy(currentSource = source)
+        if (source != StreamSource.M3U8) {
+            stopM3u8Stream()
+        }
+        val showPrompt = (source == StreamSource.SCREEN)
+        _uiState.value = _uiState.value.copy(
+            currentSource = source,
+            showScreenCapturePrompt = showPrompt
+        )
         service?.getStreamManager()?.setSource(source)
         service?.getStreamManager()?.startPreview()
+    }
+
+    fun dismissScreenCapturePrompt() {
+        _uiState.value = _uiState.value.copy(showScreenCapturePrompt = false)
+    }
+
+    fun playM3u8(url: String? = null, name: String? = null, headers: Map<String, String>? = null) {
+        val targetUrl = url ?: _uiState.value.m3u8Url
+        val targetHeaders = headers ?: _uiState.value.m3u8Headers
+        val targetName = name ?: _uiState.value.activeM3u8Name
+        _uiState.value = _uiState.value.copy(
+            m3u8Url = targetUrl,
+            m3u8Headers = targetHeaders,
+            activeM3u8Name = targetName,
+            m3u8State = M3u8PlaybackState.PLAYING,
+            currentSource = StreamSource.M3U8
+        )
+        service?.getStreamManager()?.setSource(StreamSource.M3U8)
+        service?.getRestreamEngine()?.setupRestream(targetUrl, targetHeaders)
+        service?.getRestreamEngine()?.play()
+    }
+
+    fun pauseM3u8() {
+        service?.getRestreamEngine()?.pause()
+        _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PAUSED)
+    }
+
+    fun resumeM3u8() {
+        service?.getRestreamEngine()?.play()
+        _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PLAYING)
+    }
+
+    fun stopM3u8Stream() {
+        service?.getRestreamEngine()?.stop()
+        _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.STOPPED)
+    }
+
+    fun toggleM3u8Mute() {
+        val newMuted = !_uiState.value.isM3u8Muted
+        val targetVolume = if (newMuted) 0f else 1f
+        _uiState.value = _uiState.value.copy(isM3u8Muted = newMuted, m3u8Volume = targetVolume)
+        service?.getRestreamEngine()?.setM3u8Volume(targetVolume)
+    }
+
+    fun setM3u8Volume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        _uiState.value = _uiState.value.copy(
+            m3u8Volume = clamped,
+            isM3u8Muted = clamped == 0f
+        )
+        service?.getRestreamEngine()?.setM3u8Volume(clamped)
+    }
+
+    fun selectSavedStream(stream: SavedStreamItem) {
+        val headers = mutableMapOf<String, String>()
+        if (stream.userAgent.isNotBlank()) headers["User-Agent"] = stream.userAgent
+        if (stream.referer.isNotBlank()) headers["Referer"] = stream.referer
+        playM3u8(url = stream.url, name = stream.name, headers = headers)
+    }
+
+    fun setImageDisplayMode(mode: ImageDisplayMode) {
+        val updated = _uiState.value.bgConfig.copy(displayMode = mode)
+        updateBackgroundConfig(updated)
     }
 
     fun updateConfig(config: StreamConfig) {
@@ -322,14 +403,33 @@ class MainViewModel : ViewModel() {
 
     fun setM3u8Source(url: String, headers: Map<String, String>) {
         _uiState.value = _uiState.value.copy(m3u8Url = url, m3u8Headers = headers)
-        service?.getRestreamEngine()?.setupRestream(url, headers)
+        playM3u8(url = url, headers = headers)
     }
 
-    fun saveStream(name: String, url: String) {
+    fun saveStream(name: String, url: String, userAgent: String = "", referer: String = "") {
         if (name.isBlank() || url.isBlank()) return
         val current = _uiState.value.savedStreams.toMutableList()
-        current.add(SavedStreamItem(name = name.trim(), url = url.trim()))
+        current.add(SavedStreamItem(
+            name = name.trim(),
+            url = url.trim(),
+            userAgent = userAgent.trim(),
+            referer = referer.trim()
+        ))
         _uiState.value = _uiState.value.copy(savedStreams = current)
+    }
+
+    fun updateSavedStream(id: String, name: String, url: String, userAgent: String = "", referer: String = "") {
+        val updated = _uiState.value.savedStreams.map { item ->
+            if (item.id == id) {
+                item.copy(
+                    name = name.trim().ifEmpty { item.name },
+                    url = url.trim().ifEmpty { item.url },
+                    userAgent = userAgent.trim(),
+                    referer = referer.trim()
+                )
+            } else item
+        }
+        _uiState.value = _uiState.value.copy(savedStreams = updated)
     }
 
     fun deleteStream(id: String) {
@@ -378,7 +478,7 @@ class MainViewModel : ViewModel() {
                 }
                 val path = destFile.absolutePath
                 withContext(Dispatchers.Main) {
-                    val newConfig = _uiState.value.bgConfig.copy(imageUri = path)
+                    val newConfig = _uiState.value.bgConfig.copy(imageUri = path, displayMode = ImageDisplayMode.FULL_IMAGE)
                     updateBackgroundConfig(newConfig)
                 }
             } catch (e: Exception) {
@@ -400,7 +500,7 @@ class MainViewModel : ViewModel() {
                 }
                 val path = destFile.absolutePath
                 withContext(Dispatchers.Main) {
-                    val newConfig = _uiState.value.bgConfig.copy(imageUri = path)
+                    val newConfig = _uiState.value.bgConfig.copy(imageUri = path, displayMode = ImageDisplayMode.FULL_IMAGE)
                     updateBackgroundConfig(newConfig)
                 }
             } catch (e: Exception) {

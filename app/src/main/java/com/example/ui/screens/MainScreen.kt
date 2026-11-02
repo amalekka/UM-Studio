@@ -36,12 +36,18 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.zIndex
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -89,6 +95,19 @@ fun MainScreen(viewModel: MainViewModel) {
                 NavigationBarItem(
                     selected = currentTab == 1,
                     onClick = { currentTab = 1 },
+                    icon = { Icon(Icons.Default.Dns, "M3U8 & Streams") },
+                    label = { Text("M3U8 & Streams", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFF10B981),
+                        selectedTextColor = Color(0xFF10B981),
+                        indicatorColor = Color(0x3310B981),
+                        unselectedIconColor = Color.Gray,
+                        unselectedTextColor = Color.Gray
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 2,
+                    onClick = { currentTab = 2 },
                     icon = { Icon(Icons.Default.Share, "Destinations") },
                     label = { Text("Destinations") },
                     colors = NavigationBarItemDefaults.colors(
@@ -100,8 +119,8 @@ fun MainScreen(viewModel: MainViewModel) {
                     )
                 )
                 NavigationBarItem(
-                    selected = currentTab == 2,
-                    onClick = { currentTab = 2 },
+                    selected = currentTab == 3,
+                    onClick = { currentTab = 3 },
                     icon = { Icon(Icons.Default.Settings, "Settings") },
                     label = { Text("Settings") },
                     colors = NavigationBarItemDefaults.colors(
@@ -119,11 +138,16 @@ fun MainScreen(viewModel: MainViewModel) {
             when (currentTab) {
                 0 -> StudioPreviewScreen(
                     viewModel = viewModel,
-                    onNavigateToDestinations = { currentTab = 1 },
-                    onNavigateToSettings = { currentTab = 2 }
+                    onNavigateToM3u8 = { currentTab = 1 },
+                    onNavigateToDestinations = { currentTab = 2 },
+                    onNavigateToSettings = { currentTab = 3 }
                 )
-                1 -> DestinationsScreen(viewModel)
-                2 -> AdvancedSettingsScreen(viewModel)
+                1 -> M3u8StreamsScreen(
+                    viewModel = viewModel,
+                    onNavigateToStudio = { currentTab = 0 }
+                )
+                2 -> DestinationsScreen(viewModel)
+                3 -> AdvancedSettingsScreen(viewModel)
             }
         }
     }
@@ -133,6 +157,7 @@ fun MainScreen(viewModel: MainViewModel) {
 @Composable
 fun StudioPreviewScreen(
     viewModel: MainViewModel,
+    onNavigateToM3u8: () -> Unit = {},
     onNavigateToDestinations: () -> Unit,
     onNavigateToSettings: () -> Unit
 ) {
@@ -153,6 +178,8 @@ fun StudioPreviewScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            setZOrderMediaOverlay(false)
+            setZOrderOnTop(false)
         }
     }
 
@@ -175,53 +202,198 @@ fun StudioPreviewScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // Video Viewport
-        AndroidView(
-            factory = { openGlView },
-            modifier = Modifier.fillMaxSize()
-        )
+    val bgConfig = uiState.bgConfig
+    val hasCustomImage = bgConfig.imageUri != null && bgConfig.displayMode != MainViewModel.ImageDisplayMode.OFF
+    val bgBitmap = remember(bgConfig.imageUri) {
+        bgConfig.imageUri?.let { path ->
+            val file = File(path)
+            if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+        }
+    }
 
-        // Screen Capture Overlay Notice
-        if (uiState.currentSource == StreamSource.SCREEN) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // 1. FULL IMAGE MODE (Image front-and-center at exact aspect ratio, camera hidden)
+        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .aspectRatio(uiState.streamConfig.aspectRatio.getRatio())
+                    .align(Alignment.Center)
+                    .zIndex(0f)
+                    .graphicsLayer {
+                        alpha = bgConfig.opacity.coerceIn(0.1f, 1f)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    bitmap = bgBitmap.asImageBitmap(),
+                    contentDescription = "Uploaded Broadcast Canvas",
+                    contentScale = when (bgConfig.scaleMode) {
+                        MainViewModel.BackgroundScaleMode.COVER -> ContentScale.Crop
+                        MainViewModel.BackgroundScaleMode.CONTAIN -> ContentScale.Fit
+                        MainViewModel.BackgroundScaleMode.TOP_BANNER -> ContentScale.FillWidth
+                        MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> ContentScale.FillWidth
+                        MainViewModel.BackgroundScaleMode.STRETCH -> ContentScale.FillBounds
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = bgConfig.zoom
+                            scaleY = bgConfig.zoom
+                            translationX = bgConfig.offsetX * 5
+                            translationY = bgConfig.offsetY * 5
+                        }
+                )
+            }
+        }
+
+        // 2. PiP OVERLAY MODE (Image as full background z-index 0, Camera in top corner PiP window z-index 1)
+        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) {
+            // Full background image
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(0f),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    bitmap = bgBitmap.asImageBitmap(),
+                    contentDescription = "Background Studio Backdrop",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            // PiP Video Window (Top-End corner)
             Surface(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(24.dp),
-                color = Color(0xDD0D111C),
-                shape = RoundedCornerShape(18.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+                    .align(Alignment.TopEnd)
+                    .padding(top = 80.dp, end = 16.dp)
+                    .width(130.dp)
+                    .aspectRatio(uiState.streamConfig.aspectRatio.getRatio())
+                    .zIndex(1f)
+                    .shadow(12.dp, RoundedCornerShape(12.dp)),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(2.dp, Color(0xFF38BDF8)),
+                color = Color.Black
             ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(Icons.Default.ScreenShare, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(44.dp))
-                    Text("SCREEN BROADCAST MODE", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black)
-                    Text(
-                        if (uiState.isStreaming) "Device display is active and broadcasting" else "Tap GO LIVE to begin screen mirror stream",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 11.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AndroidView(
+                        factory = { openGlView },
+                        modifier = Modifier.fillMaxSize()
                     )
-                    Button(
-                        onClick = { viewModel.toggleSource(StreamSource.CAMERA) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3338BDF8)),
-                        shape = RoundedCornerShape(10.dp)
+                    Surface(
+                        modifier = Modifier
+                            .padding(4.dp)
+                            .align(Alignment.TopStart),
+                        color = Color.Black.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(4.dp)
                     ) {
-                        Text("SWITCH TO CAMERA", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "LIVE CAM",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
                     }
                 }
             }
         }
 
-        // Top & Bottom Vignette
+        // 3. NORMAL FULL-SCREEN CAMERA (When no image is set or image display is OFF)
+        if (!hasCustomImage || bgConfig.displayMode == MainViewModel.ImageDisplayMode.OFF) {
+            AndroidView(
+                factory = { openGlView },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(0f)
+            )
+        }
+
+        // FLOATING IMAGE MODE SWITCHER (Z-INDEX 60f)
+        if (hasCustomImage && bgBitmap != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 64.dp)
+                    .zIndex(60f),
+                color = Color(0xEE0D111C),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("IMAGE:", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Surface(
+                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.FULL_IMAGE) },
+                        color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color(0xFF38BDF8) else Color.Transparent,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            "FULL",
+                            color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color.Black else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Surface(
+                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.PIP_OVERLAY) },
+                        color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) Color(0xFF38BDF8) else Color.Transparent,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            "PiP OVERLAY",
+                            color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) Color.Black else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.OFF) },
+                        modifier = Modifier.size(20.dp)
+                    ) {
+                        Icon(Icons.Default.Close, "Hide image", tint = Color.Gray, modifier = Modifier.size(12.dp))
+                    }
+                }
+            }
+        }
+
+        // FLOATING STOP SCREEN SHARE BUTTON (Z-INDEX 60f)
+        if (uiState.currentSource == StreamSource.SCREEN) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 100.dp)
+                    .zIndex(60f),
+                color = Color(0xDDEF4444),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, Color(0xFFF87171)),
+                onClick = { viewModel.toggleSource(StreamSource.CAMERA) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.StopScreenShare, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Text("STOP SCREEN SHARE (BACK TO CAM)", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+
+        // Top & Bottom Vignette (Z-INDEX 2f)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(180.dp)
+                .height(140.dp)
                 .align(Alignment.TopCenter)
+                .zIndex(2f)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
@@ -231,8 +403,9 @@ fun StudioPreviewScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(240.dp)
+                .height(200.dp)
                 .align(Alignment.BottomCenter)
+                .zIndex(2f)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
@@ -240,11 +413,12 @@ fun StudioPreviewScreen(
                 )
         )
 
-        // MAIN OVERLAY
+        // MAIN OVERLAY - ALWAYS ON TOP (Z-INDEX 50f)
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .zIndex(50f)
         ) {
             // ROW 1: LIVE BADGE & DESTINATIONS / SETTINGS BUTTONS
             Row(
@@ -335,7 +509,7 @@ fun StudioPreviewScreen(
             Spacer(modifier = Modifier.weight(1f))
 
             // MIDDLE: AUDIO VU METER (LEFT) - REAL HARDWARE/AUDIO MONITOR
-            Box(modifier = Modifier.fillMaxWidth().weight(2f)) {
+            Box(modifier = Modifier.fillMaxWidth()) {
                 DualAudioVU(
                     modifier = Modifier.align(Alignment.CenterStart),
                     isStreaming = uiState.isStreaming,
@@ -345,14 +519,22 @@ fun StudioPreviewScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // PERSISTENT M3U8 & LIVE STREAM CONTROL DOCK (ALWAYS VISIBLE ABOVE ACTIONS)
+            M3u8ControlDock(
+                viewModel = viewModel,
+                uiState = uiState,
+                onOpenManager = onNavigateToM3u8,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
 
             // BOTTOM DECK: CHAT & ACTIONS
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(260.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    .height(245.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // LEFT: CHAT (45%)
                 if (isChatVisible) {
@@ -456,6 +638,17 @@ fun StudioPreviewScreen(
             onDismiss = { showM3u8Dialog = false }
         )
     }
+
+    // High-Priority Screen Capture Activation Modal
+    if (uiState.showScreenCapturePrompt) {
+        ScreenCapturePromptDialog(
+            viewModel = viewModel,
+            onStartScreenCapture = {
+                (context as? MainActivity)?.requestScreenCapture()
+            },
+            onDismiss = { viewModel.dismissScreenCapturePrompt() }
+        )
+    }
 }
 
 @Composable
@@ -500,7 +693,7 @@ fun DualAudioVU(
     levelL: Float,
     levelR: Float
 ) {
-    val barHeight = 160.dp
+    val barHeight = 100.dp
     // When offline or muted, levels MUST strictly remain at 0% (empty)
     val actualL = if (!isStreaming || isMuted) 0f else levelL.coerceIn(0f, 1f)
     val actualR = if (!isStreaming || isMuted) 0f else levelR.coerceIn(0f, 1f)
@@ -511,7 +704,7 @@ fun DualAudioVU(
     Surface(
         modifier = modifier
             .width(44.dp)
-            .height(barHeight + 40.dp)
+            .height(barHeight + 32.dp)
             .padding(start = 4.dp),
         color = Color(0xBF1E2330),
         shape = RoundedCornerShape(12.dp),
@@ -519,7 +712,7 @@ fun DualAudioVU(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(vertical = 8.dp)
+            modifier = Modifier.padding(vertical = 6.dp)
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("L", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -536,7 +729,7 @@ fun DualAudioVU(
 
 @Composable
 fun VuBar(level: Float) {
-    val height = 140.dp
+    val height = 85.dp
     Box(
         modifier = Modifier
             .width(6.dp)
@@ -740,6 +933,25 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
         }
 
         if (config.imageUri != null) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text("STUDIO DISPLAY MODE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(6.dp))
+            PillSelector(
+                options = listOf("Full Image", "PiP Overlay", "Hidden"),
+                selectedIndex = when (config.displayMode) {
+                    MainViewModel.ImageDisplayMode.FULL_IMAGE -> 0
+                    MainViewModel.ImageDisplayMode.PIP_OVERLAY -> 1
+                    MainViewModel.ImageDisplayMode.OFF -> 2
+                },
+                onSelect = { idx ->
+                    val mode = when (idx) {
+                        0 -> MainViewModel.ImageDisplayMode.FULL_IMAGE
+                        1 -> MainViewModel.ImageDisplayMode.PIP_OVERLAY
+                        else -> MainViewModel.ImageDisplayMode.OFF
+                    }
+                    viewModel.setImageDisplayMode(mode)
+                }
+            )
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("PERSISTENT ON STORAGE", color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -995,13 +1207,27 @@ fun M3u8StreamManagerDialog(viewModel: MainViewModel, onDismiss: () -> Unit) {
         ExoPlayer.Builder(context).build()
     }
     
+    val handleDismiss = {
+        try {
+            testPlayer.pause()
+            testPlayer.stop()
+            testPlayer.clearMediaItems()
+        } catch (_: Exception) {}
+        onDismiss()
+    }
+
     DisposableEffect(testPlayer) {
         onDispose {
-            testPlayer.release()
+            try {
+                testPlayer.pause()
+                testPlayer.stop()
+                testPlayer.clearMediaItems()
+                testPlayer.release()
+            } catch (_: Exception) {}
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = handleDismiss) {
         Surface(
             color = Color(0xFF0F1422),
             shape = RoundedCornerShape(18.dp),
@@ -1027,7 +1253,7 @@ fun M3u8StreamManagerDialog(viewModel: MainViewModel, onDismiss: () -> Unit) {
                         Text("ADVANCED M3U8 MANAGER", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
                         Text("HLS INGESTION & PLAYLIST REPOSITORY", color = Color(0xFF38BDF8), fontSize = 10.sp)
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = handleDismiss, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.Close, null, tint = Color.Gray)
                     }
                 }
@@ -1254,7 +1480,11 @@ fun M3u8StreamManagerDialog(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 // Action Buttons
                 Button(
                     onClick = {
-                        testPlayer.stop()
+                        try {
+                            testPlayer.pause()
+                            testPlayer.stop()
+                            testPlayer.clearMediaItems()
+                        } catch (_: Exception) {}
                         val headers = mutableMapOf<String, String>()
                         if (userAgent.isNotEmpty()) headers["User-Agent"] = userAgent
                         if (referer.isNotEmpty()) headers["Referer"] = referer
@@ -1271,10 +1501,7 @@ fun M3u8StreamManagerDialog(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 }
 
                 TextButton(
-                    onClick = {
-                        testPlayer.stop()
-                        onDismiss()
-                    },
+                    onClick = handleDismiss,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 ) {
                     Text("CANCEL", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
@@ -1309,3 +1536,286 @@ fun SourceOptionItem(title: String, subtitle: String, icon: ImageVector, selecte
         }
     }
 }
+
+@Composable
+fun ScreenCapturePromptDialog(
+    viewModel: MainViewModel,
+    onStartScreenCapture: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            color = Color(0xFF0F1422),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .background(Color(0x3338BDF8), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.ScreenShare,
+                        null,
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                Text(
+                    "SCREEN BROADCAST MODE",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    "Broadcast your entire device display in real-time. Share games, mobile applications, demos, or tutorials directly to all active destinations.",
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 17.sp
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Button(
+                    onClick = {
+                        onStartScreenCapture()
+                        onDismiss()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.PlayArrow, null, tint = Color.Black)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "START SCREEN CAPTURE",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        viewModel.toggleSource(StreamSource.CAMERA)
+                        onDismiss()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x3338BDF8)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.CameraAlt, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "RETURN TO CAMERA",
+                        color = Color(0xFF38BDF8),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun M3u8ControlDock(
+    viewModel: MainViewModel,
+    uiState: MainViewModel.UiState,
+    onOpenManager: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expandedDropdown by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = Color(0xF20D1322),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
+        shadowElevation = 8.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Header Row: Status Indicator, Stream Name, Quick Switch Dropdown
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val statusColor = when (uiState.m3u8State) {
+                        MainViewModel.M3u8PlaybackState.PLAYING -> Color(0xFF10B981)
+                        MainViewModel.M3u8PlaybackState.PAUSED -> Color(0xFFF59E0B)
+                        MainViewModel.M3u8PlaybackState.STOPPED -> Color(0xFFEF4444)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .background(statusColor, CircleShape)
+                    )
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "M3U8 / HLS DOCK: ",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                uiState.m3u8State.name,
+                                color = statusColor,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                        Text(
+                            uiState.activeM3u8Name,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Dropdown to switch saved streams quickly without opening dialog
+                Box {
+                    Surface(
+                        onClick = { expandedDropdown = true },
+                        color = Color(0x3338BDF8),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("SWITCH", color = Color(0xFF38BDF8), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(14.dp))
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = expandedDropdown,
+                        onDismissRequest = { expandedDropdown = false },
+                        modifier = Modifier.background(Color(0xFF0F1422))
+                    ) {
+                        uiState.savedStreams.forEach { stream ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(stream.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Text(stream.url, color = Color.Gray, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                },
+                                onClick = {
+                                    expandedDropdown = false
+                                    viewModel.selectSavedStream(stream)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Action Row: Play/Pause, HARD STOP, Mute, Advanced Dialog
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Play / Pause
+                if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PLAYING) {
+                    Button(
+                        onClick = { viewModel.pauseM3u8() },
+                        modifier = Modifier.weight(1f).height(38.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Pause, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("PAUSE", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+                } else {
+                    Button(
+                        onClick = { viewModel.resumeM3u8() },
+                        modifier = Modifier.weight(1f).height(38.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PAUSED) "RESUME" else "PLAY", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+
+                // HARD STOP Button (Kills audio and connection)
+                Button(
+                    onClick = { viewModel.stopM3u8Stream() },
+                    modifier = Modifier.weight(1.2f).height(38.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp)
+                ) {
+                    Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("HARD STOP", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+
+                // Mute / Unmute
+                IconButton(
+                    onClick = { viewModel.toggleM3u8Mute() },
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(if (uiState.isM3u8Muted) Color(0x33EF4444) else Color(0x3338BDF8), RoundedCornerShape(8.dp))
+                ) {
+                    Icon(
+                        if (uiState.isM3u8Muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                        null,
+                        tint = if (uiState.isM3u8Muted) Color(0xFFEF4444) else Color(0xFF38BDF8),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                // Manage M3U8 & Streams Screen
+                IconButton(
+                    onClick = onOpenManager,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(Color(0x33818CF8), RoundedCornerShape(8.dp))
+                ) {
+                    Icon(Icons.Default.Dns, "Manage M3U8 Streams", tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+    }
+}
+

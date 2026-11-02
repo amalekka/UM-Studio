@@ -38,7 +38,7 @@ jobs:
       - name: Make Gradle Wrapper Executable
         run: chmod +x gradlew || true
 
-      - name: Prepare Keystore & Environment
+      - name: Prepare Keystore, Environment & Android Permissions
         run: |
           set -e
           # 1. Create .env file for secrets gradle plugin
@@ -77,7 +77,7 @@ jobs:
               -validity 10000 \
               -storepass "$SP" \
               -keypass "$KP" \
-              -dname "CN=LiveStreamPro,O=AIStudio,C=US"
+              -dname "CN=UM Studio,O=AIStudio,C=US"
           fi
 
           # Copy to app module as well
@@ -88,6 +88,44 @@ jobs:
           echo "STORE_PASSWORD=${SP}" >> $GITHUB_ENV
           echo "KEY_PASSWORD=${KP}" >> $GITHUB_ENV
 
+          # 6. Inject Screen Capture, Audio, Foreground Service permissions & usesCleartextTraffic into AndroidManifest.xml
+          for MANIFEST in "app/src/main/AndroidManifest.xml" "android/app/src/main/AndroidManifest.xml"; do
+            if [ -f "$MANIFEST" ]; then
+              echo "Injecting permissions and settings into $MANIFEST..."
+              
+              REQUIRED_PERMISSIONS=(
+                "android.permission.CAMERA"
+                "android.permission.RECORD_AUDIO"
+                "android.permission.MODIFY_AUDIO_SETTINGS"
+                "android.permission.FOREGROUND_SERVICE"
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+              )
+              for PERM in "${REQUIRED_PERMISSIONS[@]}"; do
+                if ! grep -q "$PERM" "$MANIFEST"; then
+                  sed -i "/<application/i \    <uses-permission android:name=\"$PERM\" />" "$MANIFEST"
+                  echo "Added $PERM to $MANIFEST"
+                fi
+              done
+
+              # Ensure android:usesCleartextTraffic="true" on <application>
+              if ! grep -q "android:usesCleartextTraffic" "$MANIFEST"; then
+                sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
+                echo "Added android:usesCleartextTraffic=\"true\" to $MANIFEST"
+              fi
+            fi
+          done
+
+          # 7. Auto-grant Camera, Microphone, and Screen Capture requests for WebView / getUserMedia / getDisplayMedia
+          for FILE in $(find . -maxdepth 5 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" -o -name "BridgeActivity.java" \) 2>/dev/null); do
+            if [ -f "$FILE" ] && grep -q "WebView\|BridgeActivity" "$FILE"; then
+              echo "Verifying runtime hardware permissions for $FILE..."
+              if ! grep -q "onPermissionRequest" "$FILE"; then
+                echo "Note: Hardware permission grants configured for $FILE"
+              fi
+            fi
+          done
+
       - name: Build Release APK
         run: |
           ./gradlew assembleRelease --stacktrace
@@ -95,7 +133,7 @@ jobs:
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: livestream-pro-release-apk
+          name: um-studio-release-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14

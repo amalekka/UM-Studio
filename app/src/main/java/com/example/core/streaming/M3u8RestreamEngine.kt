@@ -127,6 +127,18 @@ class M3u8RestreamEngine(
         }, 5000)
     }
 
+    fun play() {
+        exoPlayer?.play()
+    }
+
+    fun pause() {
+        exoPlayer?.pause()
+    }
+
+    fun isPlaying(): Boolean = exoPlayer?.isPlaying == true
+
+    fun getPlayer(): ExoPlayer? = exoPlayer
+
     fun setM3u8Volume(volume: Float) {
         exoPlayer?.volume = volume.coerceIn(0f, 1f)
     }
@@ -138,9 +150,18 @@ class M3u8RestreamEngine(
     }
 
     private fun releasePlayer() {
-        exoPlayer?.setVideoSurface(null)
-        exoPlayer?.stop()
-        exoPlayer?.release()
-        exoPlayer = null
+        try {
+            exoPlayer?.setVideoSurface(null)
+            exoPlayer?.pause()
+            exoPlayer?.stop()
+            exoPlayer?.clearMediaItems()
+            exoPlayer?.release()
+        } catch (e: Exception) {
+            Log.e("M3u8Engine", "Error releasing player", e)
+        } finally {
+            exoPlayer = null
+            _isSourceLoading.value = false
+            _sourceError.value = null
+        }
     }
 }
