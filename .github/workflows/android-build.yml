@@ -120,8 +120,23 @@ jobs:
           for FILE in $(find . -maxdepth 5 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" -o -name "BridgeActivity.java" \) 2>/dev/null); do
             if [ -f "$FILE" ] && grep -q "WebView\|BridgeActivity" "$FILE"; then
               echo "Verifying runtime hardware permissions for $FILE..."
-              if ! grep -q "onPermissionRequest" "$FILE"; then
-                echo "Note: Hardware permission grants configured for $FILE"
+            fi
+          done
+
+          # 8. Inject ffmpeg-kit dependency and repositories into build files
+          for GRADLE_FILE in $(find . -maxdepth 4 -name "build.gradle*" 2>/dev/null); do
+            if [ -f "$GRADLE_FILE" ]; then
+              if ! grep -q "ffmpeg-kit-full-gpl" "$GRADLE_FILE"; then
+                if grep -q "dependencies {" "$GRADLE_FILE"; then
+                  sed -i '/dependencies {/a \    implementation "dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:6.0.3"' "$GRADLE_FILE"
+                  echo "Injected ffmpeg-kit into $GRADLE_FILE"
+                fi
+              fi
+              if ! grep -q "jitpack.io" "$GRADLE_FILE"; then
+                if grep -q "repositories {" "$GRADLE_FILE"; then
+                  sed -i '/repositories {/a \    maven { url '\''https://jitpack.io'\'' }' "$GRADLE_FILE"
+                  echo "Injected jitpack.io into $GRADLE_FILE"
+                fi
               fi
             fi
           done

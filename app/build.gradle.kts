@@ -115,6 +115,7 @@ dependencies {
   implementation(libs.media3.exoplayer.hls)
   implementation(libs.media3.ui)
   implementation("com.github.pedroSG94.RootEncoder:library:2.4.5")
+  implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:6.0.3")
   implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
