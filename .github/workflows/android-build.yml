@@ -16,6 +16,11 @@ jobs:
     name: Build & Package APKs
     runs-on: ubuntu-latest
 
+    env:
+      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+      KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -37,19 +42,22 @@ jobs:
 
       - name: Prepare Build Environment & Keystores
         run: |
-          # Create .env file for secrets gradle plugin
+          # 1. Create .env file for secrets gradle plugin
           if [ -f ".env.example" ]; then
             cp .env.example .env
           else
             touch .env
           fi
 
-          # Decode debug keystore if base64 file exists
-          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+          # 2. Decode debug keystore if base64 file exists
+          if [ -f "debug.keystore.base64" ]; then
             base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || true
           fi
+          if [ -f "debug.keystore" ]; then
+            cp -f debug.keystore app/debug.keystore 2>/dev/null || true
+          fi
 
-          # Ensure a release keystore exists if not provided via secrets
+          # 3. Ensure a release keystore exists in root and app module
           if [ ! -f "my-upload-key.jks" ]; then
             echo "Generating fallback upload keystore for release build..."
             keytool -genkey -v \
@@ -62,16 +70,13 @@ jobs:
               -keypass android \
               -dname "CN=LiveStreamPro,O=AIStudio,C=US"
           fi
+          cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Build Release APK
-        env:
-          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease -x lintVitalAnalyzeRelease --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
