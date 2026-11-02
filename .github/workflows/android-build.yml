@@ -27,10 +27,13 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Setup Gradle 8.7
+      - name: Setup Gradle 9.3.1 (Required by AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: '8.7'
+          gradle-version: '9.3.1'
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x gradlew || true
 
       - name: Prepare Build Environment & Keystores
         run: |
@@ -48,7 +51,7 @@ jobs:
 
           # Ensure a release keystore exists if not provided via secrets
           if [ ! -f "my-upload-key.jks" ]; then
-            echo "Generating fallback upload keystore..."
+            echo "Generating fallback upload keystore for release build..."
             keytool -genkey -v \
               -keystore my-upload-key.jks \
               -alias upload \
@@ -61,14 +64,14 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Build Release APK
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
-        run: gradle assembleRelease --stacktrace
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
