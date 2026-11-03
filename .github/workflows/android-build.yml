@@ -1,46 +1,4 @@
-name: Android CI Build
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-jobs:
-  build:
-    name: Build & Package Release APK
-    runs-on: ubuntu-latest
-
-    env:
-      GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:+UseG1GC' -Dorg.gradle.workers.max=2"
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 20 (If Web Assets Exist)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Setup Gradle 9.3.1 (Required by AGP 9.1.1)
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '9.3.1'
-          cache-disabled: false
-
-      - name: Prepare Keystore, Permissions & Inject Native RTMP Engine
+- name: Prepare Keystore, Permissions & Inject Native RTMP Engine
         run: |
           set -e
           # 1. Create .env file
@@ -131,7 +89,7 @@ jobs:
             fi
           done
 
-          # 7. Generate NativeRtmpBridge.java with Crash-Proof Null Safety & Safe Try-Catch
+          # 7. Generate NativeRtmpBridge.java + register it in MainActivity
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
@@ -291,39 +249,63 @@ jobs:
           }
           EOF
             sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
-          fi
 
-      - name: Build Release APK
-        run: |
-          if [ -d "android/app" ] && [ ! -d "app" ]; then
-            cd android
+            # === NEW: Register the bridge inside MainActivity ===
+            if [[ "$MAIN_FILE" == *.kt ]]; then
+              # Kotlin MainActivity
+              if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
+                # Add import if missing
+                if ! grep -q "import android.webkit.WebView" "$MAIN_FILE"; then
+                  sed -i '/^package /a import android.webkit.WebView' "$MAIN_FILE"
+                fi
+                # Inject registration after the WebView is ready (common Capacitor / Cordova pattern)
+                # We look for the typical onCreate or the bridge init point
+                if grep -q "super.onCreate" "$MAIN_FILE"; then
+                  # Insert right after super.onCreate(...)
+                  sed -i '/super\.onCreate/a\
+          try {\
+              val webView = findViewById<WebView>(android.R.id.content)?.findViewWithTag("webview")\
+                  ?: (this as? androidx.appcompat.app.AppCompatActivity)?.window?.decorView?.findViewById(android.R.id.content)\
+              // Fallback for Capacitor\
+              val bridgeWebView = try { Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(\
+                  Class.forName("com.getcapacitor.BridgeActivity").cast(this)?.javaClass?.getMethod("getBridge")?.invoke(this)\
+              ) as? WebView } catch (e: Exception) { null }\
+              val target = bridgeWebView ?: webView\
+              if (target != null) {\
+                  target.addJavascriptInterface(NativeRtmpBridge(this, target), "NativeRtmpBridge")\
+                  android.util.Log.d("UMStudio", "NativeRtmpBridge registered successfully")\
+              }\
+          } catch (e: Exception) {\
+              android.util.Log.e("UMStudio", "Failed to register NativeRtmpBridge", e)\
+          }' "$MAIN_FILE"
+                fi
+              fi
+            else
+              # Java MainActivity
+              if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
+                if ! grep -q "import android.webkit.WebView;" "$MAIN_FILE"; then
+                  sed -i '/^package /a import android.webkit.WebView;' "$MAIN_FILE"
+                fi
+                if grep -q "super.onCreate" "$MAIN_FILE"; then
+                  sed -i '/super\.onCreate/a\
+              try {\
+                  WebView webView = findViewById(android.R.id.content);\
+                  // Capacitor fallback\
+                  try {\
+                      Class<?> bridgeActivity = Class.forName("com.getcapacitor.BridgeActivity");\
+                      Object bridge = bridgeActivity.getMethod("getBridge").invoke(this);\
+                      if (bridge != null) {\
+                          webView = (WebView) Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(bridge);\
+                      }\
+                  } catch (Exception ignored) {}\
+                  if (webView != null) {\
+                      webView.addJavascriptInterface(new NativeRtmpBridge(this, webView), "NativeRtmpBridge");\
+                      android.util.Log.d("UMStudio", "NativeRtmpBridge registered successfully");\
+                  }\
+              } catch (Exception e) {\
+                  android.util.Log.e("UMStudio", "Failed to register NativeRtmpBridge", e);\
+              }' "$MAIN_FILE"
+                fi
+              fi
+            fi
           fi
-          chmod +x gradlew 2>/dev/null || true
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleRelease --stacktrace
-          else
-            gradle assembleRelease --stacktrace
-          fi
-
-          UNSIGNED_APK=$(find . -path "*/outputs/apk/release/*-unsigned.apk" | head -n 1)
-          if [ -n "$UNSIGNED_APK" ]; then
-            SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}-signed.apk"
-            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | tail -n 1)/apksigner sign \
-              --ks "$KEYSTORE_PATH" \
-              --ks-key-alias upload \
-              --ks-pass pass:"$STORE_PASSWORD" \
-              --key-pass pass:"$KEY_PASSWORD" \
-              --out "$SIGNED_APK" \
-              "$UNSIGNED_APK"
-            rm -f "$UNSIGNED_APK"
-          fi
-
-      - name: Upload Release APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: um-studio-release-apk
-          path: |
-            app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
-          retention-days: 14
