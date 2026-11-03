@@ -59,6 +59,11 @@ class M3u8RestreamEngine(
     private val _diagnosticIsError = MutableStateFlow(false)
     val diagnosticIsError: StateFlow<Boolean> = _diagnosticIsError.asStateFlow()
 
+    private var reconnectAttempts = 0
+    private val maxReconnectAttempts = 20
+    private var reconnectRunnable: Runnable? = null
+    private val handler = Handler(Looper.getMainLooper())
+
     private var currentM3u8Url: String? = null
     private var customHeaders: Map<String, String> = emptyMap()
     private var ffmpegSession: FFmpegSession? = null
@@ -257,10 +262,17 @@ class M3u8RestreamEngine(
             try { startStatsMonitor(config) } catch (e: Throwable) {}
 
             val targets = if (allUrls.isNotEmpty()) allUrls else listOf(primaryUrl)
+            val flvFlags = "no_duration_filesize"
+            val rtmpFlags = "-rtmp_buffer 1000 -rtmp_live live"
+            
             val outArgs = if (targets.size == 1) {
-                "-flvflags no_duration_filesize -f flv \"${targets[0].trim().removeSurrounding("\"").removeSurrounding("'")}\""
+                val url = targets[0].trim().removeSurrounding("\"").removeSurrounding("'")
+                "$rtmpFlags -flvflags $flvFlags -f flv \"$url\""
             } else {
-                val teeList = targets.joinToString("|") { "[f=flv:flvflags=no_duration_filesize:onfail=ignore]${it.trim().removeSurrounding("\"").removeSurrounding("'")}" }
+                val teeList = targets.joinToString("|") { 
+                    val url = it.trim().removeSurrounding("\"").removeSurrounding("'")
+                    "[f=flv:flvflags=$flvFlags:onfail=ignore]$url"
+                }
                 "-f tee -map 0:v -map 0:a? \"$teeList\""
             }
 
@@ -285,10 +297,11 @@ class M3u8RestreamEngine(
             val vCodecArgs = if (canStreamCopy) {
                 "-c:v copy"
             } else {
-                "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+                val gopMin = fps
+                "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -keyint_min $gopMin -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v ${bitrateKbps}k -minrate ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps}k"
             }
 
-            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
+            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+discardcorrupt+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
             val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$cleanUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
             Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
 
@@ -319,29 +332,39 @@ class M3u8RestreamEngine(
                     val returnCode = session.returnCode
                     if (com.arthenica.ffmpegkit.ReturnCode.isCancel(returnCode)) {
                         Log.i("M3u8Engine", "FFmpeg session was cancelled.")
+                        reconnectRunnable?.let { handler.removeCallbacks(it) }
                         return@executeAsync
                     }
-                    if (_isRestreaming.value && allowFallbackToTranscode && session.returnCode?.isValueSuccess != true) {
-                        Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
-                        _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
-                        _diagnosticIsError.value = false
-                        val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
-                        val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
-                        executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
-                    } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
+
+                    if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
                         val logs = session.allLogsAsString ?: ""
+                        
+                        // 1. Handle HTTPS fallback if needed
                         if (logs.contains("Did you mean file:https", ignoreCase = true) && m3u8.startsWith("https://")) {
                             Log.w("M3u8Engine", "HTTPS protocol failed. Retrying with HTTP fallback...")
                             _diagnosticMessage.value = "Protocol Fallback • Connecting..."
                             _diagnosticIsError.value = false
                             val httpUrl = m3u8.replaceFirst("https://", "http://")
                             val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
-                            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
+                            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
                             val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
                             return@executeAsync
                         }
-                        val meaningfulError = logs.lineSequence()
+
+                        // 2. Handle Stream Copy failure fallback
+                        if (allowFallbackToTranscode) {
+                            Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
+                            _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
+                            _diagnosticIsError.value = false
+                            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
+                            val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
+                            return@executeAsync
+                        }
+
+                        // 3. Robust Auto-Restart on unexpected disconnection with retry limit
+                        val rawError = logs.lineSequence()
                             .map { it.trim() }
                             .filter { line ->
                                 line.isNotEmpty() &&
@@ -352,9 +375,37 @@ class M3u8RestreamEngine(
                                 !line.contains("frame=", true)
                             }
                             .lastOrNull() ?: "Session Closed"
-                        val cleanError = if (meaningfulError.length > 50) meaningfulError.take(50) + "..." else meaningfulError
-                        _diagnosticMessage.value = "RTMP Error: $cleanError"
-                        _diagnosticIsError.value = true
+                        
+                        // Redact URLs and Keys from error message for user privacy and clarity
+                        val redactedError = rawError
+                            .replace(Regex("rtmp[s]?://[^ ]+"), "[RTMP URL]")
+                            .replace(Regex("http[s]?://[^ ]+"), "[M3U8 URL]")
+                            .removePrefix("RTMP Error:")
+                            .trim()
+                            
+                        val finalError = if (redactedError.length > 70) redactedError.take(70) + "..." else redactedError
+
+                        if (reconnectAttempts < maxReconnectAttempts) {
+                            reconnectAttempts++
+                            Log.e("M3u8Engine", "Stream disconnected ($finalError). Retry $reconnectAttempts/$maxReconnectAttempts in 5s...")
+                            _diagnosticMessage.value = "Error: $finalError • Retrying..."
+                            _diagnosticIsError.value = true
+                            
+                            reconnectRunnable?.let { handler.removeCallbacks(it) }
+                            reconnectRunnable = Runnable {
+                                if (_isRestreaming.value) {
+                                    Log.i("M3u8Engine", "Executing auto-restart attempt $reconnectAttempts...")
+                                    executeFfmpegCommand(cmd, allowFallbackToTranscode, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
+                                }
+                            }
+                            handler.postDelayed(reconnectRunnable!!, 5000)
+                        } else {
+                            Log.e("M3u8Engine", "Max reconnect attempts reached. Stopping.")
+                            _diagnosticMessage.value = "Fatal Error: $finalError"
+                            _diagnosticIsError.value = true
+                            _isRestreaming.value = false
+                            streamManager.setStreamingStatus(StreamingStatus.ERROR)
+                        }
                     }
                 } catch (e: Throwable) {
                     Log.e("M3u8Engine", "Error in FFmpeg completion callback", e)
@@ -364,8 +415,9 @@ class M3u8RestreamEngine(
             Log.d("M3u8Engine", "FFmpeg: $msg")
             when {
                 msg.contains("Opening 'rtmp", ignoreCase = true) || msg.contains("Opening 'rtmps", ignoreCase = true) -> {
-                    _diagnosticMessage.value = "Connecting to RTMP..."
-                    _diagnosticIsError.value = false
+                    if (!_diagnosticIsError.value) {
+                        _diagnosticMessage.value = "Connecting to RTMP..."
+                    }
                 }
                 msg.contains("Output #0", ignoreCase = true) ||
                 msg.contains("Press [q] to stop", ignoreCase = true) ||
@@ -378,6 +430,7 @@ class M3u8RestreamEngine(
                 msg.contains("bitrate=", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Handshake OK • Publishing"
                     _diagnosticIsError.value = false
+                    reconnectAttempts = 0
                     streamManager.setStreamingStatus(StreamingStatus.STREAMING)
                 }
                 msg.contains("BadName", ignoreCase = true) ||
@@ -399,6 +452,7 @@ class M3u8RestreamEngine(
                 msg.contains("Stream copy", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Handshake OK • Stream Copy"
                     _diagnosticIsError.value = false
+                    reconnectAttempts = 0
                     streamManager.setStreamingStatus(StreamingStatus.STREAMING)
                 }
             }
