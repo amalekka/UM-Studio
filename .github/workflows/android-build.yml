@@ -23,11 +23,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Set up Node.js 20 (If Web Assets Exist)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Setup Gradle 9.3.1 (Required by AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v3
@@ -35,40 +43,29 @@ jobs:
           gradle-version: '9.3.1'
           cache-disabled: false
 
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew || true
-
-      - name: Prepare Keystore, Environment & Android Permissions
+      - name: Prepare Keystore, Permissions & Inject Native RTMP Engine
         run: |
           set -e
-          # 1. Create .env file for secrets gradle plugin
+          # 1. Create .env file
           touch .env
           if [ -f ".env.example" ]; then
             cp .env.example .env
           fi
 
-          # 2. Extract passwords safely without boolean coercion
+          # 2. Extract passwords safely
           SP="${{ secrets.STORE_PASSWORD }}"
-          if [ -z "$SP" ]; then
-            SP="android"
-          fi
-
+          if [ -z "$SP" ]; then SP="android"; fi
           KP="${{ secrets.KEY_PASSWORD }}"
-          if [ -z "$KP" ]; then
-            KP="android"
-          fi
+          if [ -z "$KP" ]; then KP="android"; fi
 
-          # 3. Check if release keystore exists and is valid with password
+          # 3. Validate or Generate Release Keystore
           if [ -f "my-upload-key.jks" ]; then
             if ! keytool -list -keystore my-upload-key.jks -storepass "$SP" >/dev/null 2>&1; then
-              echo "Existing keystore cannot be read with provided storepass. Recreating..."
               rm -f my-upload-key.jks app/my-upload-key.jks
             fi
           fi
 
-          # 4. Generate fallback upload keystore if needed
           if [ ! -f "my-upload-key.jks" ]; then
-            echo "Generating release upload keystore..."
             keytool -genkey -v \
               -keystore my-upload-key.jks \
               -alias upload \
@@ -80,23 +77,33 @@ jobs:
               -dname "CN=UM Studio,O=AIStudio,C=US"
           fi
 
-          # Copy to app module as well
           cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
 
-          # 5. Export environment variables to GITHUB_ENV
           echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> $GITHUB_ENV
           echo "STORE_PASSWORD=${SP}" >> $GITHUB_ENV
           echo "KEY_PASSWORD=${KP}" >> $GITHUB_ENV
 
-          # 6. Inject Screen Capture, Audio, Foreground Service permissions & usesCleartextTraffic into AndroidManifest.xml
+          # 4. Sync Web UI if package.json exists
+          if [ -f "package.json" ]; then
+            npm install --legacy-peer-deps || true
+            npm run build || true
+            if [ -d "dist" ] && [ -d "app/src/main/assets" ]; then
+              rm -rf app/src/main/assets/public/* 2>/dev/null || true
+              mkdir -p app/src/main/assets/public
+              cp -r dist/* app/src/main/assets/public/ 2>/dev/null || cp -r dist/* app/src/main/assets/ 2>/dev/null || true
+            fi
+            npx cap sync android 2>/dev/null || true
+          fi
+
+          # 5. Inject Android Permissions & usesCleartextTraffic
           for MANIFEST in "app/src/main/AndroidManifest.xml" "android/app/src/main/AndroidManifest.xml"; do
             if [ -f "$MANIFEST" ]; then
-              echo "Injecting permissions and settings into $MANIFEST..."
-              
               REQUIRED_PERMISSIONS=(
+                "android.permission.INTERNET"
                 "android.permission.CAMERA"
                 "android.permission.RECORD_AUDIO"
                 "android.permission.MODIFY_AUDIO_SETTINGS"
+                "android.permission.WAKE_LOCK"
                 "android.permission.FOREGROUND_SERVICE"
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
@@ -104,51 +111,206 @@ jobs:
               for PERM in "${REQUIRED_PERMISSIONS[@]}"; do
                 if ! grep -q "$PERM" "$MANIFEST"; then
                   sed -i "/<application/i \    <uses-permission android:name=\"$PERM\" />" "$MANIFEST"
-                  echo "Added $PERM to $MANIFEST"
                 fi
               done
-
-              # Ensure android:usesCleartextTraffic="true" on <application>
               if ! grep -q "android:usesCleartextTraffic" "$MANIFEST"; then
                 sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
-                echo "Added android:usesCleartextTraffic=\"true\" to $MANIFEST"
               fi
             fi
           done
 
-          # 7. Auto-grant Camera, Microphone, and Screen Capture requests for WebView / getUserMedia / getDisplayMedia
-          for FILE in $(find . -maxdepth 5 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" -o -name "BridgeActivity.java" \) 2>/dev/null); do
-            if [ -f "$FILE" ] && grep -q "WebView\|BridgeActivity" "$FILE"; then
-              echo "Verifying runtime hardware permissions for $FILE..."
-            fi
-          done
-
-          # 8. Inject ffmpeg-kit dependency and repositories into build files
-          for GRADLE_FILE in $(find . -maxdepth 4 -name "build.gradle*" 2>/dev/null); do
+          # 6. Inject ffmpeg-kit dependency (Supports both Groovy .gradle and Kotlin .gradle.kts)
+          for GRADLE_FILE in "app/build.gradle" "app/build.gradle.kts" "android/app/build.gradle" "android/app/build.gradle.kts"; do
             if [ -f "$GRADLE_FILE" ]; then
-              if ! grep -q "ffmpeg-kit-full-gpl" "$GRADLE_FILE"; then
-                if grep -q "dependencies {" "$GRADLE_FILE"; then
-                  sed -i '/dependencies {/a \    implementation "dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:6.0.3"' "$GRADLE_FILE"
-                  echo "Injected ffmpeg-kit into $GRADLE_FILE"
-                fi
-              fi
-              if ! grep -q "jitpack.io" "$GRADLE_FILE"; then
-                if grep -q "repositories {" "$GRADLE_FILE"; then
-                  sed -i '/repositories {/a \    maven { url '\''https://jitpack.io'\'' }' "$GRADLE_FILE"
-                  echo "Injected jitpack.io into $GRADLE_FILE"
+              sed -i 's/minSdk = [0-9]*/minSdk = 24/g; s/minSdkVersion [0-9]*/minSdkVersion 24/g' "$GRADLE_FILE"
+              if ! grep -q "ffmpeg-kit" "$GRADLE_FILE"; then
+                if [[ "$GRADLE_FILE" == *.kts ]]; then
+                  sed -i '/dependencies {/a \    implementation("com.arthenica:ffmpeg-kit-full-gpl:6.0-2.LTS")' "$GRADLE_FILE"
+                else
+                  sed -i '/dependencies {/a \    implementation "com.arthenica:ffmpeg-kit-full-gpl:6.0-2.LTS"' "$GRADLE_FILE"
                 fi
               fi
             fi
           done
+
+          # 7. Actually Generate NativeRtmpBridge.java next to MainActivity
+          MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
+          if [ -n "$MAIN_FILE" ]; then
+            PKG_DIR=$(dirname "$MAIN_FILE")
+            PKG_NAME=$(grep "^package " "$MAIN_FILE" | head -n 1 | sed 's/package //;s/;//' | tr -d '\r\n ')
+            echo "Injecting NativeRtmpBridge.java into package $PKG_NAME at $PKG_DIR..."
+
+            cat << 'EOF' > "$PKG_DIR/NativeRtmpBridge.java"
+          package PACKAGE_PLACEHOLDER;
+
+          import android.app.Activity;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebView;
+          import com.arthenica.ffmpegkit.FFmpegKit;
+          import com.arthenica.ffmpegkit.FFmpegKitConfig;
+          import com.arthenica.ffmpegkit.Statistics;
+          import org.json.JSONArray;
+          import java.io.File;
+          import java.io.FileOutputStream;
+
+          public class NativeRtmpBridge {
+              private final Activity activity;
+              private final WebView webView;
+              private String activePipePath = null;
+              private FileOutputStream pipeOutputStream = null;
+
+              public NativeRtmpBridge(Activity activity, WebView webView) {
+                  this.activity = activity;
+                  this.webView = webView;
+                  FFmpegKitConfig.enableStatisticsCallback((Statistics stats) -> {
+                      final int kbps = (int) (stats.getBitrate() / 1000.0);
+                      final int fps = (int) stats.getVideoFps();
+                      activity.runOnUiThread(() -> {
+                          if (this.webView != null) {
+                              this.webView.evaluateJavascript("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + "," + fps + ");", null);
+                          }
+                      });
+                  });
+              }
+
+              private String buildOutputArgs(String rtmpUrlsJson) throws Exception {
+                  JSONArray arr = new JSONArray(rtmpUrlsJson);
+                  if (arr.length() == 0) return "";
+                  if (arr.length() == 1) {
+                      return "-f flv \"" + arr.getString(0) + "\"";
+                  }
+                  StringBuilder tee = new StringBuilder();
+                  for (int i = 0; i < arr.length(); i++) {
+                      if (i > 0) tee.append("|");
+                      tee.append("[f=flv:onfail=ignore]").append(arr.getString(i));
+                  }
+                  return "-f tee -map 0:v -map 0:a? \"" + tee.toString() + "\"";
+              }
+
+              @JavascriptInterface
+              public void startM3u8Restream(String m3u8Url, String bgBase64, String rtmpUrlsJson, int bitrate, int fps, int width, int height) {
+                  try {
+                      stopStream();
+                      String outArgs = buildOutputArgs(rtmpUrlsJson);
+                      if (outArgs.isEmpty()) return;
+                      int br = bitrate > 500 ? bitrate : 4000;
+                      int targetFps = fps > 0 ? fps : 30;
+                      int gop = targetFps * 2;
+                      int w = width > 0 ? width : 1280;
+                      int h = height > 0 ? height : 720;
+
+                      String cmd;
+                      if (bgBase64 != null && bgBase64.length() > 100) {
+                          String cleanB64 = bgBase64.contains(",") ? bgBase64.substring(bgBase64.indexOf(",") + 1) : bgBase64;
+                          byte[] imgBytes = Base64.decode(cleanB64, Base64.DEFAULT);
+                          File bgFile = new File(activity.getCacheDir(), "stream_bg.png");
+                          try (FileOutputStream fos = new FileOutputStream(bgFile)) { fos.write(imgBytes); }
+                          cmd = "-re -loop 1 -i \"" + bgFile.getAbsolutePath() + "\" -re -i \"" + m3u8Url + "\" "
+                              + "-filter_complex \"[0:v]scale=" + w + ":" + h + "[bg];[1:v]scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]\" "
+                              + "-map \"[v]\" -map 1:a? -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br*2) + "k "
+                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                      } else {
+                          cmd = "-re -i \"" + m3u8Url + "\" -vf \"scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p\" "
+                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br*2) + "k "
+                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                      }
+                      FFmpegKit.executeAsync(cmd, session -> {});
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
+              }
+
+              @JavascriptInterface
+              public void startLivePipe(String rtmpUrlsJson, int width, int height, int fps, int bitrate) {
+                  try {
+                      stopStream();
+                      String outArgs = buildOutputArgs(rtmpUrlsJson);
+                      if (outArgs.isEmpty()) return;
+                      activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(activity);
+                      int br = bitrate > 500 ? bitrate : 4000;
+                      int targetFps = fps > 0 ? fps : 30;
+                      int gop = targetFps * 2;
+
+                      String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
+                          + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br*2) + "k "
+                          + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+
+                      FFmpegKit.executeAsync(cmd, session -> {});
+                      new Thread(() -> {
+                          try {
+                              pipeOutputStream = new FileOutputStream(activePipePath);
+                          } catch (Exception ignored) {}
+                      }).start();
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
+              }
+
+              @JavascriptInterface
+              public void pushVideoChunk(String base64Chunk) {
+                  try {
+                      if (pipeOutputStream != null && base64Chunk != null) {
+                          String clean = base64Chunk.contains(",") ? base64Chunk.substring(base64Chunk.indexOf(",") + 1) : base64Chunk;
+                          byte[] data = Base64.decode(clean, Base64.DEFAULT);
+                          pipeOutputStream.write(data);
+                          pipeOutputStream.flush();
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @JavascriptInterface
+              public void stopStream() {
+                  try {
+                      FFmpegKit.cancel();
+                      if (pipeOutputStream != null) {
+                          pipeOutputStream.close();
+                          pipeOutputStream = null;
+                      }
+                      if (activePipePath != null) {
+                          FFmpegKitConfig.closeFFmpegPipe(activePipePath);
+                          activePipePath = null;
+                      }
+                  } catch (Exception ignored) {}
+              }
+          }
+          EOF
+            sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
+          fi
 
       - name: Build Release APK
         run: |
-          ./gradlew assembleRelease --stacktrace
+          if [ -d "android/app" ] && [ ! -d "app" ]; then
+            cd android
+          fi
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          chmod +x gradlew 2>/dev/null || true
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleRelease --stacktrace
+          else
+            gradle assembleRelease --stacktrace
+          fi
+
+          # Auto-sign unsigned release APK if generated unsigned
+          UNSIGNED_APK=$(find . -path "*/outputs/apk/release/*-unsigned.apk" | head -n 1)
+          if [ -n "$UNSIGNED_APK" ]; then
+            SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}-signed.apk"
+            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | tail -n 1)/apksigner sign \
+              --ks "$KEYSTORE_PATH" \
+              --ks-key-alias upload \
+              --ks-pass pass:"$STORE_PASSWORD" \
+              --key-pass pass:"$KEY_PASSWORD" \
+              --out "$SIGNED_APK" \
+              "$UNSIGNED_APK"
+            rm -f "$UNSIGNED_APK"
+          fi
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: um-studio-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: |
+            app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
