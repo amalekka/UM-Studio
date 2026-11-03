@@ -438,13 +438,19 @@ class MainViewModel : ViewModel() {
     }
 
     fun stopStream() {
-        service?.getStreamManager()?.stopStream()
-        stopM3u8Stream()
-        stopTimer()
-        _uiState.value = _uiState.value.copy(
-            isStreaming = false,
-            streamingStatus = StreamingStatus.IDLE
-        )
+        try {
+            _uiState.value = _uiState.value.copy(
+                isStreaming = false,
+                streamingStatus = StreamingStatus.IDLE,
+                currentBitrate = 0,
+                fps = 0
+            )
+            stopTimer()
+            stopM3u8Stream()
+            service?.getStreamManager()?.stopStream()
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Error stopping stream", e)
+        }
     }
 
     fun stopPreview() {
