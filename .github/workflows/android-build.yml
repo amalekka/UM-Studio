@@ -250,7 +250,7 @@ jobs:
 
             sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
 
-            # Simple registration (works for most Capacitor / WebView apps)
+            # Simple registration
             if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
               if [[ "$MAIN_FILE" == *.kt ]]; then
                 sed -i '/^package /a import android.webkit.WebView' "$MAIN_FILE"
@@ -264,27 +264,46 @@ jobs:
 
       - name: Build Release APK
         run: |
+          set -e
+
           if [ -d "android/app" ] && [ ! -d "app" ]; then
             cd android
           fi
+
           chmod +x gradlew 2>/dev/null || true
+
           if [ -f "./gradlew" ]; then
             ./gradlew assembleRelease --stacktrace
           else
             gradle assembleRelease --stacktrace
           fi
 
+          # Find the unsigned APK
           UNSIGNED_APK=$(find . -path "*/outputs/apk/release/*-unsigned.apk" | head -n 1)
+
           if [ -n "$UNSIGNED_APK" ]; then
+            echo "Found unsigned APK: $UNSIGNED_APK"
+
+            # Get the latest build-tools version safely
+            BUILD_TOOLS_VERSION=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)
+            APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner"
+
             SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}-signed.apk"
-            \( ANDROID_HOME/build-tools/ \)(ls $ANDROID_HOME/build-tools | tail -n 1)/apksigner sign \
+
+            echo "Signing with: $APKSIGNER"
+            "$APKSIGNER" sign \
               --ks "$KEYSTORE_PATH" \
               --ks-key-alias upload \
               --ks-pass pass:"$STORE_PASSWORD" \
               --key-pass pass:"$KEY_PASSWORD" \
               --out "$SIGNED_APK" \
               "$UNSIGNED_APK"
+
             rm -f "$UNSIGNED_APK"
+            echo "Signed APK created: $SIGNED_APK"
+          else
+            echo "No unsigned APK found, checking for already signed APK..."
+            find . -path "*/outputs/apk/release/*.apk" | head -n 5
           fi
 
       - name: Upload Release APK Artifact
