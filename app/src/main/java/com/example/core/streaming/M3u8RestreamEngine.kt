@@ -201,11 +201,12 @@ class M3u8RestreamEngine(
         preferStreamCopy: Boolean = true,
         canStreamCopyOverride: Boolean? = null
     ) {
-        val m3u8 = currentM3u8Url
-        if (m3u8.isNullOrBlank()) {
+        val rawM3u8 = currentM3u8Url
+        if (rawM3u8.isNullOrBlank()) {
             Log.e("M3u8Engine", "Cannot start restreaming: M3U8 URL is empty")
             return
         }
+        val m3u8 = rawM3u8.trim().removeSurrounding("\"").removeSurrounding("'")
 
         _isRestreaming.value = true
         _diagnosticMessage.value = "Connecting to RTMP..."
@@ -224,7 +225,7 @@ class M3u8RestreamEngine(
         }
 
         val fps = if (config.videoQuality.fps > 0) config.videoQuality.fps else 30
-        val bitrateKbps = (config.videoQuality.defaultBitrate / 1000).coerceAtLeast(2500)
+        val bitrateKbps = (config.videoQuality.defaultBitrate / 1000).coerceIn(1500, 4500)
         val gop = fps * 2
 
         // Check if stream is H.264 compatible without accessing exoPlayer on background threads
@@ -244,10 +245,10 @@ class M3u8RestreamEngine(
         val vCodecArgs = if (canStreamCopy) {
             "-c:v copy"
         } else {
-            "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k"
+            "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
         }
 
-        val cmd = "$headerPrefix-rw_timeout 15000000 -re -i \"$m3u8\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
+        val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$m3u8\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
         Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
 
         stopFfmpeg()
@@ -276,10 +277,20 @@ class M3u8RestreamEngine(
                 Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
                 _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
                 _diagnosticIsError.value = false
-                val transcodeCmd = "$headerPrefix-rw_timeout 15000000 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
+                val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
                 executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
             } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
                 val logs = session.allLogsAsString ?: ""
+                if (logs.contains("Did you mean file:https", ignoreCase = true) && m3u8.startsWith("https://")) {
+                    Log.w("M3u8Engine", "HTTPS protocol failed. Retrying with HTTP fallback...")
+                    _diagnosticMessage.value = "Protocol Fallback • Connecting..."
+                    _diagnosticIsError.value = false
+                    val httpUrl = m3u8.replaceFirst("https://", "http://")
+                    val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+                    val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$httpUrl\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
+                    executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
+                    return@executeAsync
+                }
                 val meaningfulError = logs.lineSequence()
                     .map { it.trim() }
                     .filter { line ->
@@ -325,8 +336,8 @@ class M3u8RestreamEngine(
                 val reportedFps = stats.videoFps.toInt()
                 val rawBitrate = stats.bitrate
                 val kbps = when {
-                    rawBitrate > 50000 -> (rawBitrate / 1000.0).toInt()
-                    rawBitrate > 0 -> rawBitrate.toInt()
+                    rawBitrate > 50000 -> (rawBitrate / 1000.0).toInt().coerceIn(1500, 4500)
+                    rawBitrate > 0 -> rawBitrate.toInt().coerceIn(1500, 4500)
                     else -> bitrateKbps
                 }
                 val finalFps = if (reportedFps > 0) reportedFps else if (_m3u8Fps.value > 0) _m3u8Fps.value else fps
