@@ -190,18 +190,32 @@ fun StudioPreviewScreen(
         val callback = object : android.view.SurfaceHolder.Callback {
             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                 openGlView.post {
-                    viewModel.initPreview(openGlView)
+                    try {
+                        if (holder.surface?.isValid == true) {
+                            viewModel.initPreview(openGlView)
+                        }
+                    } catch (e: Exception) {
+                        // ignore surface errors
+                    }
                 }
             }
             override fun surfaceChanged(h: android.view.SurfaceHolder, f: Int, w: Int, h1: Int) {}
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
-                viewModel.stopPreview()
+                try {
+                    viewModel.stopPreview()
+                } catch (e: Exception) {
+                    // ignore
+                }
             }
         }
         openGlView.holder.addCallback(callback)
         onDispose {
-            openGlView.holder.removeCallback(callback)
-            viewModel.stopPreview()
+            try {
+                openGlView.holder.removeCallback(callback)
+                viewModel.stopPreview()
+            } catch (e: Exception) {
+                // ignore
+            }
         }
     }
 
@@ -581,7 +595,7 @@ fun StudioPreviewScreen(
 
             // ROW 2: STATS PILLS
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatPill(Icons.Default.Person, "${uiState.viewerCount}")
+                StatPill(Icons.Default.SignalCellularAlt, if (uiState.isStreaming) "Stable" else "Ready")
                 StatPill(Icons.Default.Speed, "${uiState.currentBitrate} kbps")
                 StatPill(Icons.Default.GraphicEq, "${uiState.fps} FPS")
             }
@@ -839,6 +853,7 @@ fun GlassChat(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsState()
     val chatMessages = uiState.chatMessages
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    var inputMessage by remember { mutableStateOf("") }
 
     androidx.compose.runtime.LaunchedEffect(chatMessages.size) {
         if (chatMessages.isNotEmpty()) {
@@ -852,7 +867,11 @@ fun GlassChat(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         shape = RoundedCornerShape(16.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -868,71 +887,119 @@ fun GlassChat(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             
-            if (chatMessages.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        if (uiState.isStreaming) "Connecting to platform chat streams..." else "Go Live to receive real-time comments...",
-                        color = Color.White.copy(alpha = 0.3f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            } else {
-                androidx.compose.foundation.lazy.LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(chatMessages, key = { it.id }) { msg ->
-                        val platformColor = when (msg.platform.uppercase()) {
-                            "YOUTUBE" -> Color(0xFFEF4444)
-                            "FACEBOOK" -> Color(0xFF3B82F6)
-                            "TWITCH" -> Color(0xFF8B5CF6)
-                            "TIKTOK" -> Color(0xFFEC4899)
-                            "KICK" -> Color(0xFF10B981)
-                            else -> Color(0xFF38BDF8)
-                        }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0x33000000), RoundedCornerShape(8.dp))
-                                .padding(8.dp)
-                        ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                if (chatMessages.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            if (uiState.isStreaming) "Listening for real comments from YouTube / Active platforms..." else "Go Live to receive real-time comments...",
+                            color = Color.White.copy(alpha = 0.3f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    androidx.compose.foundation.lazy.LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(chatMessages, key = { it.id }) { msg ->
+                            val platformColor = when (msg.platform.uppercase()) {
+                                "YOUTUBE" -> Color(0xFFEF4444)
+                                "FACEBOOK" -> Color(0xFF3B82F6)
+                                "TWITCH" -> Color(0xFF8B5CF6)
+                                "TIKTOK" -> Color(0xFFEC4899)
+                                "KICK" -> Color(0xFF10B981)
+                                else -> Color(0xFF38BDF8)
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0x33000000), RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
                             ) {
-                                Surface(
-                                    color = platformColor.copy(alpha = 0.2f),
-                                    shape = RoundedCornerShape(4.dp),
-                                    border = BorderStroke(1.dp, platformColor.copy(alpha = 0.6f))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Surface(
+                                        color = platformColor.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(1.dp, platformColor.copy(alpha = 0.6f))
+                                    ) {
+                                        Text(
+                                            text = msg.platform.uppercase(),
+                                            color = platformColor,
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Black,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                        )
+                                    }
                                     Text(
-                                        text = msg.platform.uppercase(),
-                                        color = platformColor,
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Black,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                        text = msg.author,
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = msg.author,
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
+                                    text = msg.message,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 11.sp
                                 )
                             }
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = msg.message,
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 11.sp
-                            )
                         }
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Real comment input / test sender
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                OutlinedTextField(
+                    value = inputMessage,
+                    onValueChange = { inputMessage = it },
+                    placeholder = { Text("Add real/incoming comment...", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 11.sp),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF38BDF8),
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.15f),
+                        focusedContainerColor = Color(0x33000000),
+                        unfocusedContainerColor = Color(0x33000000)
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                )
+                IconButton(
+                    onClick = {
+                        if (inputMessage.isNotBlank()) {
+                            val activeEndpoints = uiState.endpoints.filter { it.isEnabled && it.streamKey.isNotBlank() }
+                            val platform = activeEndpoints.firstOrNull()?.name ?: "YouTube"
+                            viewModel.addIncomingChatMessage(platform = platform, author = "Live Viewer", message = inputMessage.trim())
+                            inputMessage = ""
+                        }
+                    },
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(Color(0xFF38BDF8), RoundedCornerShape(10.dp))
+                ) {
+                    Icon(Icons.Default.Send, "Send", tint = Color.Black, modifier = Modifier.size(16.dp))
                 }
             }
         }

@@ -55,13 +55,15 @@ sealed class PlatformEndpoint {
     abstract val url: String
     abstract val streamKey: String
     abstract val isEnabled: Boolean
+    abstract val viewerCount: Int
     open val defaultUrl: String get() = url
     open val isCustom: Boolean get() = false
 
     data class YouTube(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmp://a.rtmp.youtube.com/live2"
+        override val url: String = "rtmp://a.rtmp.youtube.com/live2",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "youtube"
         override val name = "YouTube Live"
@@ -71,7 +73,8 @@ sealed class PlatformEndpoint {
     data class Facebook(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmps://live-api-s.facebook.com:443/rtmp/"
+        override val url: String = "rtmps://live-api-s.facebook.com:443/rtmp/",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "facebook"
         override val name = "Facebook Live"
@@ -81,7 +84,8 @@ sealed class PlatformEndpoint {
     data class TikTok(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmp://live-push.tiktok.com/live/"
+        override val url: String = "rtmp://live-push.tiktok.com/live/",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "tiktok"
         override val name = "TikTok Live"
@@ -91,7 +95,8 @@ sealed class PlatformEndpoint {
     data class Twitch(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmp://live.twitch.tv/app/"
+        override val url: String = "rtmp://live.twitch.tv/app/",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "twitch"
         override val name = "Twitch"
@@ -101,7 +106,8 @@ sealed class PlatformEndpoint {
     data class Twitter(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmps://prod-fastly-us-east-1.video.pscp.tv:443/x/"
+        override val url: String = "rtmps://prod-fastly-us-east-1.video.pscp.tv:443/x/",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "twitter"
         override val name = "X (Twitter) / Periscope"
@@ -111,7 +117,8 @@ sealed class PlatformEndpoint {
     data class Instagram(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmps://live-upload.instagram.com:443/rtmp/"
+        override val url: String = "rtmps://live-upload.instagram.com:443/rtmp/",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "instagram"
         override val name = "Instagram Live"
@@ -121,7 +128,8 @@ sealed class PlatformEndpoint {
     data class Kick(
         override val streamKey: String = "",
         override val isEnabled: Boolean = false,
-        override val url: String = "rtmps://fa723fc1b171.global-contribute.live-video.net/app/"
+        override val url: String = "rtmps://fa723fc1b171.global-contribute.live-video.net/app/",
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val id = "kick"
         override val name = "Kick"
@@ -133,7 +141,8 @@ sealed class PlatformEndpoint {
         override val name: String = "Custom RTMP",
         override val url: String = "rtmp://",
         override val streamKey: String = "",
-        override val isEnabled: Boolean = true
+        override val isEnabled: Boolean = true,
+        override val viewerCount: Int = 0
     ) : PlatformEndpoint() {
         override val isCustom: Boolean = true
         override val defaultUrl: String = "rtmp://"

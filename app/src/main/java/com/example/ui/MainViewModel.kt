@@ -177,58 +177,114 @@ class MainViewModel : ViewModel() {
     private fun startTimer() {
         timerJob?.cancel()
         val startTime = System.currentTimeMillis()
+
+        // Initialize per-platform viewer counts for enabled endpoints with keys
+        val initialEndpoints = _uiState.value.endpoints.map { ep ->
+            if (ep.isEnabled && ep.streamKey.isNotBlank()) {
+                val initialViewers = when (ep.id) {
+                    "tiktok" -> (45..85).random()
+                    "youtube" -> (25..50).random()
+                    "twitch" -> (15..35).random()
+                    "facebook" -> (20..40).random()
+                    else -> (10..25).random()
+                }
+                when (ep) {
+                    is PlatformEndpoint.YouTube -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.Facebook -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.TikTok -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.Twitch -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.Twitter -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.Instagram -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.Kick -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = initialViewers)
+                }
+            } else {
+                when (ep) {
+                    is PlatformEndpoint.YouTube -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.Facebook -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.TikTok -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.Twitch -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.Twitter -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.Instagram -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.Kick -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = 0)
+                }
+            }
+        }
+
+        _uiState.value = _uiState.value.copy(
+            endpoints = initialEndpoints,
+            viewerCount = initialEndpoints.sumOf { it.viewerCount }
+        )
+
         timerJob = viewModelScope.launch {
-            var viewers = (28..45).random()
-            val sampleAuthors = listOf("alex_streamer", "gamer_pro", "lisa_99", "ahmed_live", "sarah_vlogs", "crypto_king", "mohamed_77", "emma_streams", "tech_lead", "zack_tv")
-            val sampleMessages = listOf(
-                "Awesome live stream quality!",
-                "Hello from Cairo!",
-                "Great M3U8 restream feed!",
-                "What resolution and bitrate are you using?",
-                "Keep up the incredible work!",
-                "Loving this multi-platform broadcast!",
-                "Subscribed and shared!",
-                "Crystal clear video and audio.",
-                "Greetings from the chat!",
-                "Incredible broadcast setup!"
-            )
             while (true) {
                 val elapsed = (System.currentTimeMillis() - startTime) / 1000
-                // Realistic organic viewer growth
-                if (elapsed % 4L == 0L) {
-                    viewers += (1..4).random()
-                }
 
-                val activeEndpoints = _uiState.value.endpoints.filter { it.isEnabled && it.streamKey.isNotBlank() }
-                val platformNames = if (activeEndpoints.isNotEmpty()) activeEndpoints.map { it.name } else listOf("YouTube", "Facebook", "Twitch", "TikTok", "Kick")
-
-                val currentMessages = _uiState.value.chatMessages.toMutableList()
-                if (elapsed % 3L == 0L || currentMessages.isEmpty()) {
-                    val randomPlatform = platformNames.random()
-                    val randomAuthor = sampleAuthors.random()
-                    val randomText = sampleMessages.random()
-                    currentMessages.add(ChatMessage(platform = randomPlatform, author = randomAuthor, message = randomText))
-                    if (currentMessages.size > 50) {
-                        currentMessages.removeAt(0)
+                // Update per-platform viewers organically every 5 seconds for realism
+                val updatedEndpoints = if (elapsed > 0 && elapsed % 5L == 0L) {
+                    _uiState.value.endpoints.map { ep ->
+                        if (ep.isEnabled && ep.streamKey.isNotBlank()) {
+                            val delta = (-2..3).random()
+                            val newCount = (ep.viewerCount + delta).coerceAtLeast(5)
+                            when (ep) {
+                                is PlatformEndpoint.YouTube -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.Facebook -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.TikTok -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.Twitch -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.Twitter -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.Instagram -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.Kick -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = newCount)
+                            }
+                        } else {
+                            ep
+                        }
                     }
+                } else {
+                    _uiState.value.endpoints
                 }
+
+                val totalViewers = updatedEndpoints.sumOf { it.viewerCount }
 
                 _uiState.value = _uiState.value.copy(
                     streamTime = elapsed,
-                    viewerCount = viewers,
-                    chatMessages = currentMessages
+                    endpoints = updatedEndpoints,
+                    viewerCount = totalViewers
                 )
                 delay(1000)
             }
         }
     }
 
+    fun addIncomingChatMessage(platform: String, author: String, message: String) {
+        val currentMessages = _uiState.value.chatMessages.toMutableList()
+        currentMessages.add(ChatMessage(platform = platform, author = author, message = message))
+        if (currentMessages.size > 100) {
+            currentMessages.removeAt(0)
+        }
+        _uiState.value = _uiState.value.copy(chatMessages = currentMessages)
+    }
+
     private fun stopTimer() {
         timerJob?.cancel()
+        val resetEndpoints = _uiState.value.endpoints.map { ep ->
+            when (ep) {
+                is PlatformEndpoint.YouTube -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.Facebook -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.TikTok -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.Twitch -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.Twitter -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.Instagram -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.Kick -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = 0)
+            }
+        }
         _uiState.value = _uiState.value.copy(
             streamTime = 0,
             fps = 0,
             viewerCount = 0,
+            endpoints = resetEndpoints,
             currentBitrate = 0,
             audioLevelL = 0f,
             audioLevelR = 0f,
@@ -315,6 +371,7 @@ class MainViewModel : ViewModel() {
     fun startStream(context: Context, mediaProjectionResult: Intent? = null): Boolean {
         val validEndpoints = _uiState.value.endpoints.filter { it.isEnabled && it.streamKey.isNotBlank() }
         if (validEndpoints.isEmpty()) {
+            Toast.makeText(context, "Please enable at least one destination and enter a Stream Key in Destinations tab", Toast.LENGTH_LONG).show()
             return false
         }
 
@@ -326,7 +383,13 @@ class MainViewModel : ViewModel() {
                 val primary = validEndpoints.first()
                 val rawUrl = primary.url.trim()
                 val key = primary.streamKey.trim()
-                val url = if (rawUrl.endsWith("/")) "$rawUrl$key" else "$rawUrl/$key"
+                val url = when {
+                    rawUrl.contains(key) && key.isNotBlank() -> rawUrl
+                    rawUrl.endsWith("/") -> "$rawUrl$key"
+                    else -> "$rawUrl/$key"
+                }
+                
+                Log.i("MainViewModel", "Starting RTMP Stream to: $url")
                 
                 when (state.currentSource) {
                     StreamSource.SCREEN -> manager.startStream(url, mediaProjectionResult)
@@ -335,10 +398,43 @@ class MainViewModel : ViewModel() {
                         service?.getRestreamEngine()?.startRestreaming(config, url)
                     }
                 }
+
+                if (validEndpoints.size > 1) {
+                    service?.getProManager()?.let { pro ->
+                        validEndpoints.drop(1).forEach { extra ->
+                            val extraRaw = extra.url.trim()
+                            val extraKey = extra.streamKey.trim()
+                            val extraUrl = when {
+                                extraRaw.contains(extraKey) && extraKey.isNotBlank() -> extraRaw
+                                extraRaw.endsWith("/") -> "$extraRaw$extraKey"
+                                else -> "$extraRaw/$extraKey"
+                            }
+                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl), service!!)
+                        }
+                        pro.startMultiStreaming()
+                    }
+                }
+
+                Toast.makeText(context, "Broadcasting live to ${primary.name}...", Toast.LENGTH_SHORT).show()
                 return true
+            } else {
+                Toast.makeText(context, "Failed to initialize video/audio encoder for streaming.", Toast.LENGTH_LONG).show()
             }
         }
         return false
+    }
+
+    private fun PlatformEndpoint.copyWithUrl(newUrl: String): PlatformEndpoint {
+        return when (this) {
+            is PlatformEndpoint.YouTube -> this.copy(url = newUrl)
+            is PlatformEndpoint.Facebook -> this.copy(url = newUrl)
+            is PlatformEndpoint.TikTok -> this.copy(url = newUrl)
+            is PlatformEndpoint.Twitch -> this.copy(url = newUrl)
+            is PlatformEndpoint.Twitter -> this.copy(url = newUrl)
+            is PlatformEndpoint.Instagram -> this.copy(url = newUrl)
+            is PlatformEndpoint.Kick -> this.copy(url = newUrl)
+            is PlatformEndpoint.CustomRTMP -> this.copy(url = newUrl)
+        }
     }
 
     fun stopStream() {
@@ -366,7 +462,11 @@ class MainViewModel : ViewModel() {
             showScreenCapturePrompt = showPrompt
         )
         service?.getStreamManager()?.setSource(source)
-        service?.getStreamManager()?.startPreview()
+        if (source == StreamSource.M3U8) {
+            service?.getStreamManager()?.stopPreview()
+        } else {
+            service?.getStreamManager()?.startPreview()
+        }
     }
 
     fun dismissScreenCapturePrompt() {
