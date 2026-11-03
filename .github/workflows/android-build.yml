@@ -131,7 +131,7 @@ jobs:
             fi
           done
 
-          # 7. Generate NativeRtmpBridge.java with HTTPS protocol whitelist & safe bitrate clamping
+          # 7. Generate NativeRtmpBridge.java with Crash-Proof Null Safety & Safe Try-Catch
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
@@ -161,31 +161,50 @@ jobs:
               public NativeRtmpBridge(Activity activity, WebView webView) {
                   this.activity = activity;
                   this.webView = webView;
-                  FFmpegKitConfig.enableStatisticsCallback((Statistics stats) -> {
-                      int rawKbps = (int) (stats.getBitrate() / 1000.0);
-                      final int kbps = (rawKbps > 100 && rawKbps < 8000) ? rawKbps : 4200;
-                      final int fps = Math.min(60, Math.max(24, (int) stats.getVideoFps()));
+                  try {
+                      FFmpegKitConfig.enableStatisticsCallback((Statistics stats) -> {
+                          try {
+                              int rawKbps = (int) (stats.getBitrate() / 1000.0);
+                              final int kbps = (rawKbps > 100 && rawKbps < 8000) ? rawKbps : 4200;
+                              final int fps = Math.min(60, Math.max(24, (int) stats.getVideoFps()));
 
-                      activity.runOnUiThread(() -> {
-                          if (this.webView != null) {
-                              this.webView.evaluateJavascript("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + "," + fps + ");", null);
-                          }
+                              if (activity != null) {
+                                  activity.runOnUiThread(() -> {
+                                      try {
+                                          if (this.webView != null) {
+                                              this.webView.evaluateJavascript("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + "," + fps + ");", null);
+                                          }
+                                      } catch (Exception ignored) {}
+                                  });
+                              }
+                          } catch (Exception ignored) {}
                       });
-                  });
+                  } catch (Exception ignored) {}
               }
 
-              private String buildOutputArgs(String rtmpUrlsJson) throws Exception {
-                  JSONArray arr = new JSONArray(rtmpUrlsJson);
-                  if (arr.length() == 0) return "";
-                  if (arr.length() == 1) {
-                      return "-f flv \"" + arr.getString(0).replaceAll("[\"']", "").trim() + "\"";
+              private String buildOutputArgs(String rtmpUrlsJson) {
+                  try {
+                      if (rtmpUrlsJson == null || rtmpUrlsJson.isEmpty()) return "";
+                      JSONArray arr = new JSONArray(rtmpUrlsJson);
+                      if (arr.length() == 0) return "";
+                      if (arr.length() == 1) {
+                          String url = arr.getString(0);
+                          if (url == null) return "";
+                          return "-f flv \"" + url.replaceAll("[\"']", "").trim() + "\"";
+                      }
+                      StringBuilder tee = new StringBuilder();
+                      for (int i = 0; i < arr.length(); i++) {
+                          String url = arr.getString(i);
+                          if (url != null && !url.isEmpty()) {
+                              if (tee.length() > 0) tee.append("|");
+                              tee.append("[f=flv:onfail=ignore]").append(url.replaceAll("[\"']", "").trim());
+                          }
+                      }
+                      if (tee.length() == 0) return "";
+                      return "-f tee -map 0:v -map 0:a? \"" + tee.toString() + "\"";
+                  } catch (Exception e) {
+                      return "";
                   }
-                  StringBuilder tee = new StringBuilder();
-                  for (int i = 0; i < arr.length(); i++) {
-                      if (i > 0) tee.append("|");
-                      tee.append("[f=flv:onfail=ignore]").append(arr.getString(i).replaceAll("[\"']", "").trim());
-                  }
-                  return "-f tee -map 0:v -map 0:a? \"" + tee.toString() + "\"";
               }
 
               @JavascriptInterface
@@ -193,11 +212,11 @@ jobs:
                   new Thread(() -> {
                       try {
                           stopStream();
-                          String cleanUrl = m3u8Url != null ? m3u8Url.replaceAll("[\"']", "").trim() : "";
-                          if (cleanUrl.isEmpty()) return;
+                          if (m3u8Url == null || m3u8Url.isEmpty()) return;
+                          String cleanUrl = m3u8Url.replaceAll("[\"']", "").trim();
 
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
-                          if (outArgs.isEmpty()) return;
+                          if (outArgs == null || outArgs.isEmpty()) return;
 
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
@@ -223,7 +242,7 @@ jobs:
                       try {
                           stopStream();
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
-                          if (outArgs.isEmpty()) return;
+                          if (outArgs == null || outArgs.isEmpty()) return;
                           activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(activity);
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
@@ -235,9 +254,10 @@ jobs:
                               + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
 
                           FFmpegKit.executeAsync(cmd, session -> {});
-                          pipeOutputStream = new FileOutputStream(activePipePath);
+                          if (activePipePath != null) {
+                              pipeOutputStream = new FileOutputStream(activePipePath);
+                          }
                       } catch (Exception e) {
-                          e.printStackTrace();
                       }
                   }).start();
               }
@@ -259,11 +279,11 @@ jobs:
                   try {
                       FFmpegKit.cancel();
                       if (pipeOutputStream != null) {
-                          pipeOutputStream.close();
+                          try { pipeOutputStream.close(); } catch (Exception ignored) {}
                           pipeOutputStream = null;
                       }
                       if (activePipePath != null) {
-                          FFmpegKitConfig.closeFFmpegPipe(activePipePath);
+                          try { FFmpegKitConfig.closeFFmpegPipe(activePipePath); } catch (Exception ignored) {}
                           activePipePath = null;
                       }
                   } catch (Exception ignored) {}
