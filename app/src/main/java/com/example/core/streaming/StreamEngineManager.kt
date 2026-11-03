@@ -146,24 +146,24 @@ class StreamEngineManager(
     fun initCamera(openGlView: OpenGlView) {
         if (isReleased) return
         if (currentSource == StreamSource.M3U8) return
-        if (rtmpCamera2 == null) {
-            rtmpCamera2 = RtmpCamera2(openGlView, connectChecker).apply {
-                setFpsListener { measuredFps ->
-                    _fps.value = measuredFps
+        try {
+            if (rtmpCamera2 == null) {
+                rtmpCamera2 = RtmpCamera2(openGlView, connectChecker).apply {
+                    setFpsListener { measuredFps ->
+                        _fps.value = measuredFps
+                    }
+                    setCustomAudioEffect(audioEffect)
                 }
-                setCustomAudioEffect(audioEffect)
-            }
-        } else {
-            try {
+            } else {
                 rtmpCamera2?.replaceView(openGlView)
-            } catch (e: Exception) {
-                Log.e("StreamEngine", "Failed to replace view: ${e.message}")
             }
-        }
-        _isFrontCamera.value = rtmpCamera2?.isFrontCamera == true
-        _isFlashOn.value = rtmpCamera2?.isLanternEnabled == true
-        if (currentSource == StreamSource.CAMERA) {
-            startPreview()
+            _isFrontCamera.value = rtmpCamera2?.isFrontCamera == true
+            _isFlashOn.value = rtmpCamera2?.isLanternEnabled == true
+            if (currentSource == StreamSource.CAMERA) {
+                startPreview()
+            }
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Error initializing camera: ${e.message}")
         }
     }
 
@@ -225,15 +225,16 @@ class StreamEngineManager(
 
     fun startPreview(w: Int = 0, h: Int = 0) {
         if (isReleased) return
-        if (rtmpCamera2?.isOnPreview == false) {
-            try {
+        if (currentSource == StreamSource.M3U8) return
+        try {
+            if (rtmpCamera2?.isOnPreview == false) {
                 val (defaultW, defaultH) = calculateResolution(currentConfig.videoQuality, currentConfig.aspectRatio)
                 val targetW = if (w > 0) w else defaultW
                 val targetH = if (h > 0) h else defaultH
                 rtmpCamera2?.startPreview(targetW, targetH)
-            } catch (e: Exception) {
-                Log.e("StreamEngine", "Failed to start preview", e)
             }
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Failed to start preview (surface may be abandoned)", e)
         }
     }
 

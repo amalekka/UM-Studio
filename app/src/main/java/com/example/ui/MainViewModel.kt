@@ -64,6 +64,14 @@ class MainViewModel : ViewModel() {
         val referer: String = ""
     )
 
+    data class ChatMessage(
+        val id: String = UUID.randomUUID().toString(),
+        val platform: String,
+        val author: String,
+        val message: String,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
     data class UiState(
         val isStreaming: Boolean = false,
         val streamingStatus: StreamingStatus = StreamingStatus.IDLE,
@@ -106,7 +114,8 @@ class MainViewModel : ViewModel() {
         val isFrontCamera: Boolean = false,
         val bgConfig: BackgroundConfig = BackgroundConfig(),
         val isChatVisible: Boolean = true,
-        val currentTab: Int = 0
+        val currentTab: Int = 0,
+        val chatMessages: List<ChatMessage> = emptyList()
     )
 
     private var pendingView: OpenGlView? = null
@@ -169,16 +178,45 @@ class MainViewModel : ViewModel() {
         timerJob?.cancel()
         val startTime = System.currentTimeMillis()
         timerJob = viewModelScope.launch {
-            var viewers = 1
+            var viewers = (28..45).random()
+            val sampleAuthors = listOf("alex_streamer", "gamer_pro", "lisa_99", "ahmed_live", "sarah_vlogs", "crypto_king", "mohamed_77", "emma_streams", "tech_lead", "zack_tv")
+            val sampleMessages = listOf(
+                "Awesome live stream quality!",
+                "Hello from Cairo!",
+                "Great M3U8 restream feed!",
+                "What resolution and bitrate are you using?",
+                "Keep up the incredible work!",
+                "Loving this multi-platform broadcast!",
+                "Subscribed and shared!",
+                "Crystal clear video and audio.",
+                "Greetings from the chat!",
+                "Incredible broadcast setup!"
+            )
             while (true) {
                 val elapsed = (System.currentTimeMillis() - startTime) / 1000
-                // Simulate organic viewer growth during live broadcast
-                if (elapsed % 7L == 0L) {
-                    viewers += (1..3).random()
+                // Realistic organic viewer growth
+                if (elapsed % 4L == 0L) {
+                    viewers += (1..4).random()
                 }
+
+                val activeEndpoints = _uiState.value.endpoints.filter { it.isEnabled && it.streamKey.isNotBlank() }
+                val platformNames = if (activeEndpoints.isNotEmpty()) activeEndpoints.map { it.name } else listOf("YouTube", "Facebook", "Twitch", "TikTok", "Kick")
+
+                val currentMessages = _uiState.value.chatMessages.toMutableList()
+                if (elapsed % 3L == 0L || currentMessages.isEmpty()) {
+                    val randomPlatform = platformNames.random()
+                    val randomAuthor = sampleAuthors.random()
+                    val randomText = sampleMessages.random()
+                    currentMessages.add(ChatMessage(platform = randomPlatform, author = randomAuthor, message = randomText))
+                    if (currentMessages.size > 50) {
+                        currentMessages.removeAt(0)
+                    }
+                }
+
                 _uiState.value = _uiState.value.copy(
                     streamTime = elapsed,
-                    viewerCount = viewers
+                    viewerCount = viewers,
+                    chatMessages = currentMessages
                 )
                 delay(1000)
             }
@@ -193,7 +231,8 @@ class MainViewModel : ViewModel() {
             viewerCount = 0,
             currentBitrate = 0,
             audioLevelL = 0f,
-            audioLevelR = 0f
+            audioLevelR = 0f,
+            chatMessages = emptyList()
         )
     }
 

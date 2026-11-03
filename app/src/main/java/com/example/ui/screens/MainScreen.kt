@@ -18,9 +18,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -164,6 +166,7 @@ fun StudioPreviewScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     
+    var isOverlayVisible by remember { mutableStateOf(true) }
     var showSourceSheet by remember { mutableStateOf(false) }
     var showM3u8Dialog by remember { mutableStateOf(false) }
     var showBackgroundSheet by remember { mutableStateOf(false) }
@@ -431,26 +434,50 @@ fun StudioPreviewScreen(
         )
 
         // MAIN OVERLAY - ALWAYS ON TOP (Z-INDEX 50f)
+        if (!isOverlayVisible) {
+            Surface(
+                onClick = { isOverlayVisible = true },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 16.dp)
+                    .zIndex(70f),
+                color = Color(0xEE0D111C),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, Color(0xFF38BDF8))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.KeyboardArrowDown, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                    Text("SHOW CONTROLS", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 14.dp, vertical = 6.dp)
                 .zIndex(50f)
         ) {
-            // ROW 1: LIVE BADGE & SOURCE & DESTINATIONS BADGES
+            // ROW 1: LIVE BADGE & SOURCE & DESTINATIONS BADGES (SCROLLABLE & COMPACT)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     GlassPill(glowColor = if (uiState.isStreaming) Color(0xFFEF4444) else Color.Transparent) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             val pulseAlpha by rememberInfiniteTransition().animateFloat(
                                 initialValue = 0.4f,
@@ -463,18 +490,18 @@ fun StudioPreviewScreen(
                             )
                             Box(
                                 modifier = Modifier
-                                    .size(9.dp)
+                                    .size(8.dp)
                                     .clip(CircleShape)
                                     .background(
                                         if (uiState.isStreaming) Color(0xFFEF4444).copy(alpha = pulseAlpha)
                                         else Color.Gray
                                     )
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 if (uiState.isStreaming) "LIVE (${formatTime(uiState.streamTime)})" else "READY",
                                 color = Color.White,
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -482,9 +509,9 @@ fun StudioPreviewScreen(
 
                     // Source Badge
                     val sourceText = when (uiState.currentSource) {
-                        StreamSource.M3U8 -> "SOURCE: M3U8"
-                        StreamSource.CAMERA -> "SOURCE: CAM"
-                        StreamSource.SCREEN -> "SOURCE: SCREEN"
+                        StreamSource.M3U8 -> "SRC: M3U8"
+                        StreamSource.CAMERA -> "SRC: CAM"
+                        StreamSource.SCREEN -> "SRC: SCREEN"
                     }
                     val sourceColor = when (uiState.currentSource) {
                         StreamSource.M3U8 -> Color(0xFF10B981)
@@ -493,15 +520,15 @@ fun StudioPreviewScreen(
                     }
                     Surface(
                         color = sourceColor.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(10.dp),
                         border = BorderStroke(1.dp, sourceColor.copy(alpha = 0.6f))
                     ) {
                         Text(
                             text = sourceText,
                             color = sourceColor,
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
                         )
                     }
 
@@ -509,46 +536,43 @@ fun StudioPreviewScreen(
                     val enabledDestsCount = uiState.endpoints.count { it.isEnabled && it.streamKey.isNotBlank() }
                     Surface(
                         color = Color(0xFFA855F7).copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(10.dp),
                         border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.6f)),
                         onClick = { viewModel.setCurrentTab(2) }
                     ) {
                         Text(
-                            text = "DESTS: $enabledDestsCount Active",
+                            text = "DESTS: $enabledDestsCount",
                             color = Color(0xFFA855F7),
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
                         )
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Destinations shortcut button
-                    GlassPill {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clickable { onNavigateToDestinations() }
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Icon(Icons.Default.CloudQueue, null, tint = Color(0xFF818CF8), modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Icon(Icons.Default.Share, null, tint = Color(0xFF818CF8), modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("DESTS", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    // Settings gear button (WIRED TO TAB 2)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Settings gear button
                     IconButton(
                         onClick = onNavigateToSettings,
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
                             .background(Color(0xBF1E2330))
                     ) {
-                        Icon(Icons.Default.Settings, "Settings", tint = Color.White.copy(alpha = 0.85f))
+                        Icon(Icons.Default.Settings, "Settings", tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(18.dp))
+                    }
+                    // Collapse / Hide overlay button with arrow
+                    IconButton(
+                        onClick = { isOverlayVisible = false },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xBF1E2330))
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, "Hide controls", tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -594,7 +618,7 @@ fun StudioPreviewScreen(
             ) {
                 // LEFT: CHAT (45%)
                 if (isChatVisible) {
-                    GlassChat(modifier = Modifier.weight(0.45f))
+                    GlassChat(viewModel = viewModel, modifier = Modifier.weight(0.45f))
                 } else {
                     Spacer(modifier = Modifier.weight(0.01f))
                 }
@@ -644,6 +668,7 @@ fun StudioPreviewScreen(
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
     }
 
     // Background Studio Sheet
@@ -810,7 +835,17 @@ fun VuBar(level: Float) {
 }
 
 @Composable
-fun GlassChat(modifier: Modifier = Modifier) {
+fun GlassChat(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+    val uiState by viewModel.uiState.collectAsState()
+    val chatMessages = uiState.chatMessages
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    androidx.compose.runtime.LaunchedEffect(chatMessages.size) {
+        if (chatMessages.isNotEmpty()) {
+            listState.animateScrollToItem(chatMessages.size - 1)
+        }
+    }
+
     Surface(
         modifier = modifier.fillMaxHeight(),
         color = Color(0xBF1E2330),
@@ -818,16 +853,87 @@ fun GlassChat(modifier: Modifier = Modifier) {
         border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("LIVE CHAT", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("LIVE CHAT (${chatMessages.size})", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                if (uiState.isStreaming) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF10B981))
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(8.dp))
             
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Waiting for live comments...",
-                    color = Color.White.copy(alpha = 0.3f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
+            if (chatMessages.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (uiState.isStreaming) "Connecting to platform chat streams..." else "Go Live to receive real-time comments...",
+                        color = Color.White.copy(alpha = 0.3f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                androidx.compose.foundation.lazy.LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(chatMessages, key = { it.id }) { msg ->
+                        val platformColor = when (msg.platform.uppercase()) {
+                            "YOUTUBE" -> Color(0xFFEF4444)
+                            "FACEBOOK" -> Color(0xFF3B82F6)
+                            "TWITCH" -> Color(0xFF8B5CF6)
+                            "TIKTOK" -> Color(0xFFEC4899)
+                            "KICK" -> Color(0xFF10B981)
+                            else -> Color(0xFF38BDF8)
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0x33000000), RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = platformColor.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = BorderStroke(1.dp, platformColor.copy(alpha = 0.6f))
+                                ) {
+                                    Text(
+                                        text = msg.platform.uppercase(),
+                                        color = platformColor,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Black,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = msg.author,
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = msg.message,
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
             }
         }
     }

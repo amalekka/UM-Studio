@@ -73,14 +73,14 @@ fun M3u8StreamsScreen(
                 ) {
                     Column {
                         Text(
-                            text = "M3U8 STREAMS",
+                            text = "STREAMING",
                             color = Color.White,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 1.sp
                         )
                         Text(
-                            text = "HLS RESTREAM ENGINE",
+                            text = "HLS STREAMING & CONTROL",
                             color = Color(0xFF10B981),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
