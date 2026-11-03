@@ -591,13 +591,26 @@ class MainViewModel : ViewModel() {
                             return@launch
                         }
                         val hasOverlay = state.bgConfig.imageUri != null && state.bgConfig.displayMode != ImageDisplayMode.OFF
-                        restreamEngine.setupRestream(state.m3u8Url, state.m3u8Headers)
+                        val m3u8Url = state.m3u8Url
+                        val m3u8Headers = state.m3u8Headers
+                        val preferStreamCopy = state.preferM3u8StreamCopy
+
+                        // 1. ALL ExoPlayer setup, playback and format reading MUST run on Dispatchers.Main
+                        val canStreamCopy = withContext(Dispatchers.Main) {
+                            restreamEngine.setupRestream(m3u8Url, m3u8Headers)
+                            restreamEngine.play()
+                            val isH264 = restreamEngine.isH264Source()
+                            (preferStreamCopy && isH264 && !hasOverlay)
+                        }
+
+                        // 2. Keep ONLY FFmpegKit execution and RTMP sockets on Dispatchers.IO
                         restreamEngine.startRestreaming(
                             config = config,
                             primaryUrl = primaryUrl,
                             allUrls = allUrls,
                             hasOverlay = hasOverlay,
-                            preferStreamCopy = state.preferM3u8StreamCopy
+                            preferStreamCopy = preferStreamCopy,
+                            canStreamCopyOverride = canStreamCopy
                         )
                         withContext(Dispatchers.Main) {
                             _uiState.value = _uiState.value.copy(
@@ -605,7 +618,7 @@ class MainViewModel : ViewModel() {
                                 streamingStatus = StreamingStatus.STREAMING
                             )
                             startTimer()
-                            val copyModeText = if (state.preferM3u8StreamCopy && !hasOverlay) " (Ultra-Fast Copy)" else ""
+                            val copyModeText = if (canStreamCopy) " (Ultra-Fast Copy)" else ""
                             Toast.makeText(context, "Broadcasting M3U8 stream to ${primary.name}$copyModeText...", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -741,13 +754,22 @@ class MainViewModel : ViewModel() {
         )
         stopTimer()
 
-        // BACKGROUND IO with NonCancellable: safely disconnect RTMP sockets, cancel FFmpeg, tear down pipelines
+        // 1. Release ExoPlayer strictly on Dispatchers.Main
+        viewModelScope.launch(Dispatchers.Main) {
+            try {
+                service?.getRestreamEngine()?.stopPlayer()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error stopping player on Main thread", e)
+            }
+        }
+
+        // 2. BACKGROUND IO with NonCancellable: safely disconnect RTMP sockets, cancel FFmpeg, tear down pipelines
         viewModelScope.launch(Dispatchers.IO) {
             withContext(NonCancellable) {
                 try {
-                    service?.getRestreamEngine()?.stop()
+                    service?.getRestreamEngine()?.stopFfmpeg()
                 } catch (e: Exception) {
-                    Log.e("MainViewModel", "Error stopping M3U8 restream", e)
+                    Log.e("MainViewModel", "Error stopping M3U8 restream FFmpeg", e)
                 }
                 try {
                     service?.getStreamManager()?.stopStream()
@@ -769,54 +791,56 @@ class MainViewModel : ViewModel() {
     }
 
     fun toggleSource(source: StreamSource) {
-        when (source) {
-            StreamSource.M3U8 -> {
-                // Strict mutual exclusion: release Camera preview & hardware, stop Screen Capture
-                service?.getStreamManager()?.stopPreview()
-                service?.getStreamManager()?.stopCameraHardware()
-                service?.getStreamManager()?.stopDisplayStream()
-                cachedMediaProjectionResult = null
+        viewModelScope.launch(Dispatchers.Main) {
+            when (source) {
+                StreamSource.M3U8 -> {
+                    // Strict mutual exclusion: release Camera preview & hardware, stop Screen Capture
+                    service?.getStreamManager()?.stopPreview()
+                    service?.getStreamManager()?.stopCameraHardware()
+                    service?.getStreamManager()?.stopDisplayStream()
+                    cachedMediaProjectionResult = null
 
-                _uiState.value = _uiState.value.copy(
-                    currentSource = StreamSource.M3U8,
-                    showScreenCapturePrompt = false,
-                    isScreenCaptureReady = false
-                )
-                service?.getStreamManager()?.setSource(StreamSource.M3U8)
+                    _uiState.value = _uiState.value.copy(
+                        currentSource = StreamSource.M3U8,
+                        showScreenCapturePrompt = false,
+                        isScreenCaptureReady = false
+                    )
+                    service?.getStreamManager()?.setSource(StreamSource.M3U8)
 
-                if (_uiState.value.m3u8Url.isNotBlank()) {
-                    service?.getRestreamEngine()?.setupRestream(_uiState.value.m3u8Url, _uiState.value.m3u8Headers)
-                    service?.getRestreamEngine()?.play()
-                    _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PLAYING)
+                    if (_uiState.value.m3u8Url.isNotBlank()) {
+                        service?.getRestreamEngine()?.setupRestream(_uiState.value.m3u8Url, _uiState.value.m3u8Headers)
+                        service?.getRestreamEngine()?.play()
+                        _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PLAYING)
+                    }
                 }
-            }
-            StreamSource.CAMERA -> {
-                // Strict mutual exclusion: stop ExoPlayer M3U8, hide overlay, stop Screen Capture
-                stopM3u8Stream()
-                service?.getStreamManager()?.stopDisplayStream()
-                cachedMediaProjectionResult = null
+                StreamSource.CAMERA -> {
+                    // Strict mutual exclusion: stop ExoPlayer M3U8, hide overlay, stop Screen Capture
+                    stopM3u8Stream()
+                    service?.getStreamManager()?.stopDisplayStream()
+                    cachedMediaProjectionResult = null
 
-                _uiState.value = _uiState.value.copy(
-                    currentSource = StreamSource.CAMERA,
-                    showScreenCapturePrompt = false,
-                    isScreenCaptureReady = false,
-                    m3u8State = M3u8PlaybackState.STOPPED
-                )
-                service?.getStreamManager()?.setSource(StreamSource.CAMERA)
-                pendingView?.let { initPreview(it) } ?: service?.getStreamManager()?.startPreview()
-            }
-            StreamSource.SCREEN -> {
-                // Strict mutual exclusion: release Camera hardware & preview, stop ExoPlayer M3U8
-                service?.getStreamManager()?.stopPreview()
-                service?.getStreamManager()?.stopCameraHardware()
-                stopM3u8Stream()
+                    _uiState.value = _uiState.value.copy(
+                        currentSource = StreamSource.CAMERA,
+                        showScreenCapturePrompt = false,
+                        isScreenCaptureReady = false,
+                        m3u8State = M3u8PlaybackState.STOPPED
+                    )
+                    service?.getStreamManager()?.setSource(StreamSource.CAMERA)
+                    pendingView?.let { initPreview(it) } ?: service?.getStreamManager()?.startPreview()
+                }
+                StreamSource.SCREEN -> {
+                    // Strict mutual exclusion: release Camera hardware & preview, stop ExoPlayer M3U8
+                    service?.getStreamManager()?.stopPreview()
+                    service?.getStreamManager()?.stopCameraHardware()
+                    stopM3u8Stream()
 
-                _uiState.value = _uiState.value.copy(
-                    currentSource = StreamSource.SCREEN,
-                    showScreenCapturePrompt = cachedMediaProjectionResult == null,
-                    m3u8State = M3u8PlaybackState.STOPPED
-                )
-                service?.getStreamManager()?.setSource(StreamSource.SCREEN)
+                    _uiState.value = _uiState.value.copy(
+                        currentSource = StreamSource.SCREEN,
+                        showScreenCapturePrompt = cachedMediaProjectionResult == null,
+                        m3u8State = M3u8PlaybackState.STOPPED
+                    )
+                    service?.getStreamManager()?.setSource(StreamSource.SCREEN)
+                }
             }
         }
     }
@@ -826,44 +850,59 @@ class MainViewModel : ViewModel() {
     }
 
     fun playM3u8(url: String? = null, name: String? = null, headers: Map<String, String>? = null) {
-        service?.getStreamManager()?.stopPreview()
-        service?.getStreamManager()?.stopCameraHardware()
-        service?.getStreamManager()?.stopDisplayStream()
-        cachedMediaProjectionResult = null
-        val targetUrl = url ?: _uiState.value.m3u8Url
-        val targetHeaders = headers ?: _uiState.value.m3u8Headers
-        val targetName = name ?: _uiState.value.activeM3u8Name
-        _uiState.value = _uiState.value.copy(
-            m3u8Url = targetUrl,
-            m3u8Headers = targetHeaders,
-            activeM3u8Name = targetName,
-            m3u8State = M3u8PlaybackState.PLAYING,
-            currentSource = StreamSource.M3U8,
-            showScreenCapturePrompt = false
-        )
-        service?.getStreamManager()?.setSource(StreamSource.M3U8)
-        service?.getRestreamEngine()?.setupRestream(targetUrl, targetHeaders)
-        service?.getRestreamEngine()?.play()
+        viewModelScope.launch(Dispatchers.Main) {
+            service?.getStreamManager()?.stopPreview()
+            service?.getStreamManager()?.stopCameraHardware()
+            service?.getStreamManager()?.stopDisplayStream()
+            cachedMediaProjectionResult = null
+            val targetUrl = url ?: _uiState.value.m3u8Url
+            val targetHeaders = headers ?: _uiState.value.m3u8Headers
+            val targetName = name ?: _uiState.value.activeM3u8Name
+            _uiState.value = _uiState.value.copy(
+                m3u8Url = targetUrl,
+                m3u8Headers = targetHeaders,
+                activeM3u8Name = targetName,
+                m3u8State = M3u8PlaybackState.PLAYING,
+                currentSource = StreamSource.M3U8,
+                showScreenCapturePrompt = false
+            )
+            service?.getStreamManager()?.setSource(StreamSource.M3U8)
+            service?.getRestreamEngine()?.setupRestream(targetUrl, targetHeaders)
+            service?.getRestreamEngine()?.play()
+        }
     }
 
     fun pauseM3u8() {
-        service?.getRestreamEngine()?.pause()
-        _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PAUSED)
+        viewModelScope.launch(Dispatchers.Main) {
+            service?.getRestreamEngine()?.pause()
+            _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PAUSED)
+        }
     }
 
     fun resumeM3u8() {
-        service?.getRestreamEngine()?.play()
-        _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PLAYING)
+        viewModelScope.launch(Dispatchers.Main) {
+            service?.getRestreamEngine()?.play()
+            _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.PLAYING)
+        }
     }
 
     fun stopM3u8Stream() {
         _uiState.value = _uiState.value.copy(m3u8State = M3u8PlaybackState.STOPPED)
+        // 1. Release ExoPlayer strictly on Dispatchers.Main
+        viewModelScope.launch(Dispatchers.Main) {
+            try {
+                service?.getRestreamEngine()?.stopPlayer()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error stopping M3U8 player on Main thread", e)
+            }
+        }
+        // 2. Stop FFmpeg and RTMP on Dispatchers.IO
         viewModelScope.launch(Dispatchers.IO) {
             withContext(NonCancellable) {
                 try {
-                    service?.getRestreamEngine()?.stop()
+                    service?.getRestreamEngine()?.stopFfmpeg()
                 } catch (e: Exception) {
-                    Log.e("MainViewModel", "Error stopping M3U8 engine", e)
+                    Log.e("MainViewModel", "Error stopping M3U8 engine FFmpeg", e)
                 }
             }
         }
@@ -873,7 +912,9 @@ class MainViewModel : ViewModel() {
         val newMuted = !_uiState.value.isM3u8Muted
         val targetVolume = if (newMuted) 0f else 1f
         _uiState.value = _uiState.value.copy(isM3u8Muted = newMuted, m3u8Volume = targetVolume)
-        service?.getRestreamEngine()?.setM3u8Volume(targetVolume)
+        viewModelScope.launch(Dispatchers.Main) {
+            service?.getRestreamEngine()?.setM3u8Volume(targetVolume)
+        }
     }
 
     fun setM3u8Volume(volume: Float) {
@@ -882,7 +923,9 @@ class MainViewModel : ViewModel() {
             m3u8Volume = clamped,
             isM3u8Muted = clamped == 0f
         )
-        service?.getRestreamEngine()?.setM3u8Volume(clamped)
+        viewModelScope.launch(Dispatchers.Main) {
+            service?.getRestreamEngine()?.setM3u8Volume(clamped)
+        }
     }
 
     fun selectSavedStream(stream: SavedStreamItem) {

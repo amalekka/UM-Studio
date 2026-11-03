@@ -2,6 +2,8 @@ package com.example.core.streaming
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Surface
 import androidx.annotation.OptIn
@@ -69,7 +71,13 @@ class M3u8RestreamEngine(
     ) {
         this.currentM3u8Url = url
         this.customHeaders = headers
-        initializePlayer()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            initializePlayer()
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                initializePlayer()
+            }
+        }
     }
 
     private fun initializePlayer() {
@@ -145,7 +153,7 @@ class M3u8RestreamEngine(
 
     private fun startStatsMonitor(config: StreamConfig) {
         statsJob?.cancel()
-        statsJob = scope.launch {
+        statsJob = scope.launch(Dispatchers.Main) {
             var lastRenderedCount = 0
             while (isActive) {
                 delay(1000)
@@ -190,7 +198,8 @@ class M3u8RestreamEngine(
         primaryUrl: String,
         allUrls: List<String> = emptyList(),
         hasOverlay: Boolean = false,
-        preferStreamCopy: Boolean = true
+        preferStreamCopy: Boolean = true,
+        canStreamCopyOverride: Boolean? = null
     ) {
         val m3u8 = currentM3u8Url
         if (m3u8.isNullOrBlank()) {
@@ -218,11 +227,14 @@ class M3u8RestreamEngine(
         val bitrateKbps = (config.videoQuality.defaultBitrate / 1000).coerceAtLeast(2500)
         val gop = fps * 2
 
-        // Check if stream is H.264 compatible and no background overlay is active
-        val playerFormat = exoPlayer?.videoFormat
-        val mime = playerFormat?.sampleMimeType
-        val isH264 = mime?.let { it.contains("avc", ignoreCase = true) || it.contains("h264", ignoreCase = true) } ?: false
-        val canStreamCopy = (preferStreamCopy && isH264 && !hasOverlay)
+        // Check if stream is H.264 compatible without accessing exoPlayer on background threads
+        val canStreamCopy = canStreamCopyOverride ?: run {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                (preferStreamCopy && isH264Source() && !hasOverlay)
+            } else {
+                false
+            }
+        }
 
         val headerPrefix = if (customHeaders.isNotEmpty()) {
             val hLines = customHeaders.entries.joinToString("\r\n") { "${it.key}: ${it.value}" } + "\r\n"
@@ -309,15 +321,6 @@ class M3u8RestreamEngine(
         })
     }
 
-    private fun stopFfmpeg() {
-        try {
-            FFmpegKit.cancel()
-            ffmpegSession = null
-        } catch (e: Exception) {
-            Log.e("M3u8Engine", "Error stopping FFmpeg", e)
-        }
-    }
-
     fun setPiPMode(isEnabled: Boolean) {
         surfaceFilter?.let { filter ->
             if (isEnabled) {
@@ -331,12 +334,19 @@ class M3u8RestreamEngine(
     }
 
     private fun restartStream() {
-        exoPlayer?.seekTo(0)
-        exoPlayer?.play()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            exoPlayer?.seekTo(0)
+            exoPlayer?.play()
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                exoPlayer?.seekTo(0)
+                exoPlayer?.play()
+            }
+        }
     }
 
     private fun recoverFromError() {
-        android.os.Handler(context.mainLooper).postDelayed({
+        Handler(Looper.getMainLooper()).postDelayed({
             if (exoPlayer == null && currentM3u8Url != null) {
                 initializePlayer()
             }
@@ -344,19 +354,74 @@ class M3u8RestreamEngine(
     }
 
     fun play() {
-        exoPlayer?.play()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            exoPlayer?.play()
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                exoPlayer?.play()
+            }
+        }
     }
 
     fun pause() {
-        exoPlayer?.pause()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            exoPlayer?.pause()
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                exoPlayer?.pause()
+            }
+        }
     }
 
-    fun isPlaying(): Boolean = exoPlayer?.isPlaying == true
+    fun isPlaying(): Boolean = if (Looper.myLooper() == Looper.getMainLooper()) {
+        exoPlayer?.isPlaying == true
+    } else {
+        false
+    }
 
     fun getPlayer(): ExoPlayer? = exoPlayer
 
     fun setM3u8Volume(volume: Float) {
-        exoPlayer?.volume = volume.coerceIn(0f, 1f)
+        val clamped = volume.coerceIn(0f, 1f)
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            exoPlayer?.volume = clamped
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                exoPlayer?.volume = clamped
+            }
+        }
+    }
+
+    fun isH264Source(): Boolean {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return false
+        }
+        return try {
+            val playerFormat = exoPlayer?.videoFormat
+            val mime = playerFormat?.sampleMimeType
+            mime?.let { it.contains("avc", ignoreCase = true) || it.contains("h264", ignoreCase = true) } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun stopPlayer() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            releasePlayer()
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                releasePlayer()
+            }
+        }
+    }
+
+    fun stopFfmpeg() {
+        try {
+            FFmpegKit.cancel()
+            ffmpegSession = null
+        } catch (e: Exception) {
+            Log.e("M3u8Engine", "Error stopping FFmpeg", e)
+        }
     }
 
     fun stop() {
@@ -369,7 +434,7 @@ class M3u8RestreamEngine(
         _diagnosticIsError.value = false
         streamManager.setStreamingStatus(StreamingStatus.IDLE)
         streamManager.updateStats(0, 0)
-        releasePlayer()
+        stopPlayer()
         streamManager.clearFilters()
         surfaceFilter = null
     }
