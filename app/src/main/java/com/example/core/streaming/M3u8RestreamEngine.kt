@@ -288,7 +288,8 @@ class M3u8RestreamEngine(
                 "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
             }
 
-            val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i \"$cleanUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
+            val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$cleanUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
             Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
 
             try { stopFfmpeg() } catch (e: Throwable) {}
@@ -324,7 +325,8 @@ class M3u8RestreamEngine(
                         Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
                         _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
                         _diagnosticIsError.value = false
-                        val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                        val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
+                        val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                         executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
                     } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
                         val logs = session.allLogsAsString ?: ""
@@ -334,7 +336,8 @@ class M3u8RestreamEngine(
                             _diagnosticIsError.value = false
                             val httpUrl = m3u8.replaceFirst("https://", "http://")
                             val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
-                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
+                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
                             return@executeAsync
                         }
@@ -371,7 +374,8 @@ class M3u8RestreamEngine(
                 msg.contains("fps=", ignoreCase = true) ||
                 msg.contains("Handshake successful", ignoreCase = true) ||
                 msg.contains("Metadata:", ignoreCase = true) ||
-                msg.contains("speed=", ignoreCase = true) -> {
+                msg.contains("speed=", ignoreCase = true) ||
+                msg.contains("bitrate=", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Handshake OK • Publishing"
                     _diagnosticIsError.value = false
                     streamManager.setStreamingStatus(StreamingStatus.STREAMING)
@@ -379,14 +383,16 @@ class M3u8RestreamEngine(
                 msg.contains("BadName", ignoreCase = true) ||
                 msg.contains("Authentication failed", ignoreCase = true) ||
                 msg.contains("Auth error", ignoreCase = true) ||
-                msg.contains("Invalid stream", ignoreCase = true) -> {
+                msg.contains("Invalid stream", ignoreCase = true) ||
+                msg.contains("Access denied", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Auth Failed: Invalid Stream Key"
                     _diagnosticIsError.value = true
                 }
                 msg.contains("Connection refused", ignoreCase = true) ||
                 msg.contains("Cannot open connection", ignoreCase = true) ||
                 msg.contains("Connection reset", ignoreCase = true) ||
-                msg.contains("Server error", ignoreCase = true) -> {
+                msg.contains("Server error", ignoreCase = true) ||
+                msg.contains("Failed to connect", ignoreCase = true) -> {
                     _diagnosticMessage.value = "RTMP Error: Connection Refused"
                     _diagnosticIsError.value = true
                 }
@@ -408,14 +414,21 @@ class M3u8RestreamEngine(
                 val finalFps = if (reportedFps > 0) reportedFps else if (_m3u8Fps.value > 0) _m3u8Fps.value else fps
                 _m3u8Fps.value = finalFps
                 _m3u8Bitrate.value = kbps
-                _diagnosticMessage.value = "Streaming Video ($finalFps FPS)"
-                _diagnosticIsError.value = false
+                
+                if (!_diagnosticIsError.value) {
+                    _diagnosticMessage.value = "Streaming Video ($finalFps FPS)"
+                }
                 streamManager.updateStats(kbps, finalFps)
             }
         })
         } catch (e: Throwable) {
             Log.e("M3u8Engine", "Fatal error executing FFmpeg command", e)
-            _diagnosticMessage.value = "FFmpeg Start Error: ${e.message}"
+            val errMsg = if (e is NoClassDefFoundError || e is ExceptionInInitializerError || e.message?.contains("FFmpegKitConfig") == true) {
+                "Engine Init Error: Try Restarting App"
+            } else {
+                "FFmpeg Start Error: ${e.message}"
+            }
+            _diagnosticMessage.value = errMsg
             _diagnosticIsError.value = true
         }
     }

@@ -32,6 +32,10 @@ public class NativeRtmpBridge {
 
     private void initBridge() {
         try {
+            // Warm up FFmpegKit and check if native libraries are loaded
+            String version = FFmpegKitConfig.getVersion();
+            Log.i(TAG, "FFmpegKit initialized successfully, version: " + version);
+
             FFmpegKitConfig.setLogLevel(Level.AV_LOG_INFO);
             FFmpegKitConfig.enableStatisticsCallback(statistics -> {
                 try {
@@ -49,7 +53,7 @@ public class NativeRtmpBridge {
                 } catch (Exception ignored) {}
             });
         } catch (Throwable t) {
-            Log.e(TAG, "Error initializing FFmpegKit in bridge: " + t.getMessage(), t);
+            Log.e(TAG, "CRITICAL: FFmpegKit native libraries failed to load: " + t.getMessage(), t);
         }
     }
 
@@ -61,14 +65,14 @@ public class NativeRtmpBridge {
             if (arr.length() == 1) {
                 String url = arr.getString(0);
                 if (url == null || url.trim().isEmpty()) return "";
-                return "-f flv \"" + url.replaceAll("[\"']", "").trim() + "\"";
+                return "-flvflags no_duration_filesize -f flv \"" + url.replaceAll("[\"']", "").trim() + "\"";
             }
             StringBuilder tee = new StringBuilder();
             for (int i = 0; i < arr.length(); i++) {
                 String url = arr.getString(i);
                 if (url != null && !url.trim().isEmpty()) {
                     if (tee.length() > 0) tee.append("|");
-                    tee.append("[f=flv:onfail=ignore]").append(url.replaceAll("[\"']", "").trim());
+                    tee.append("[f=flv:flvflags=no_duration_filesize:onfail=ignore]").append(url.replaceAll("[\"']", "").trim());
                 }
             }
             if (tee.length() == 0) return "";
@@ -100,10 +104,11 @@ public class NativeRtmpBridge {
                 int targetFps = fps > 0 ? fps : 30;
                 int gop = targetFps * 2;
 
-                String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
+                String inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re";
+                String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe " + inputArgs + " -i \"" + cleanUrl + "\" "
                         + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
                         + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
-                        + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                        + "-af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
 
                 Log.i(TAG, "Executing M3U8 restream: " + cmd);
                 FFmpegKit.executeAsync(cmd, session -> {
@@ -111,7 +116,7 @@ public class NativeRtmpBridge {
                 }, log -> {
                     Log.d(TAG, "FFmpeg: " + log.getMessage());
                 }, statistics -> {});
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Log.e(TAG, "Fatal error in startM3u8Restream", e);
                 e.printStackTrace();
             }

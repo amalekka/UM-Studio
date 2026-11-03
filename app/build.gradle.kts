@@ -17,6 +17,13 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      abiFilters.add("armeabi-v7a")
+      abiFilters.add("arm64-v8a")
+      abiFilters.add("x86")
+      abiFilters.add("x86_64")
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -115,7 +122,7 @@ dependencies {
   implementation(libs.media3.exoplayer.hls)
   implementation(libs.media3.ui)
   implementation("com.github.pedroSG94.RootEncoder:library:2.4.5")
-  implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:6.0.3")
+  implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:8.1.9")
   implementation("com.arthenica:smart-exception-java:0.2.1")
   implementation("com.arthenica:smart-exception-common:0.2.1")
   implementation(libs.converter.moshi)
