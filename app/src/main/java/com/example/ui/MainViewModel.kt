@@ -80,17 +80,17 @@ class MainViewModel : ViewModel() {
             PlatformEndpoint.Instagram(),
             PlatformEndpoint.Kick()
         ),
-        val m3u8Url: String = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+        val m3u8Url: String = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8",
         val m3u8Headers: Map<String, String> = emptyMap(),
         val m3u8State: M3u8PlaybackState = M3u8PlaybackState.STOPPED,
         val isM3u8Muted: Boolean = false,
         val m3u8Volume: Float = 1.0f,
-        val activeM3u8Name: String = "Big Buck Bunny HLS",
+        val activeM3u8Name: String = "Apple BipBop HLS",
         val showScreenCapturePrompt: Boolean = false,
         val savedStreams: List<SavedStreamItem> = listOf(
-            SavedStreamItem(name = "Big Buck Bunny HLS", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
-            SavedStreamItem(name = "Akamai Live HLS", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"),
-            SavedStreamItem(name = "Tears of Steel HLS", url = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8")
+            SavedStreamItem(name = "Apple BipBop HLS", url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8"),
+            SavedStreamItem(name = "Apple Advanced HLS", url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/master.m3u8"),
+            SavedStreamItem(name = "Big Buck Bunny HLS", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
         ),
         val isMicEnabled: Boolean = true,
         val isCameraEnabled: Boolean = true,
@@ -105,7 +105,8 @@ class MainViewModel : ViewModel() {
         val isFlashOn: Boolean = false,
         val isFrontCamera: Boolean = false,
         val bgConfig: BackgroundConfig = BackgroundConfig(),
-        val isChatVisible: Boolean = true
+        val isChatVisible: Boolean = true,
+        val currentTab: Int = 0
     )
 
     private var pendingView: OpenGlView? = null
@@ -385,7 +386,14 @@ class MainViewModel : ViewModel() {
         if (stream.userAgent.isNotBlank()) headers["User-Agent"] = stream.userAgent
         if (stream.referer.isNotBlank()) headers["Referer"] = stream.referer
         playM3u8(url = stream.url, name = stream.name, headers = headers)
+        setCurrentTab(0)
     }
+
+    fun setCurrentTab(tab: Int) {
+        _uiState.value = _uiState.value.copy(currentTab = tab)
+    }
+
+    fun getRestreamEngine(): com.example.core.streaming.M3u8RestreamEngine? = service?.getRestreamEngine()
 
     fun setImageDisplayMode(mode: ImageDisplayMode) {
         val updated = _uiState.value.bgConfig.copy(displayMode = mode)

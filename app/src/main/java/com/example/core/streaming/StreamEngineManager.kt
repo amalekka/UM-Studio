@@ -145,6 +145,7 @@ class StreamEngineManager(
 
     fun initCamera(openGlView: OpenGlView) {
         if (isReleased) return
+        if (currentSource == StreamSource.M3U8) return
         if (rtmpCamera2 == null) {
             rtmpCamera2 = RtmpCamera2(openGlView, connectChecker).apply {
                 setFpsListener { measuredFps ->
@@ -161,7 +162,9 @@ class StreamEngineManager(
         }
         _isFrontCamera.value = rtmpCamera2?.isFrontCamera == true
         _isFlashOn.value = rtmpCamera2?.isLanternEnabled == true
-        startPreview()
+        if (currentSource == StreamSource.CAMERA) {
+            startPreview()
+        }
     }
 
     private fun calculateAudioLevels(buffer: ByteArray) {
@@ -215,6 +218,9 @@ class StreamEngineManager(
 
     fun setSource(source: StreamSource) {
         currentSource = source
+        if (source == StreamSource.M3U8) {
+            stopPreview()
+        }
     }
 
     fun startPreview(w: Int = 0, h: Int = 0) {

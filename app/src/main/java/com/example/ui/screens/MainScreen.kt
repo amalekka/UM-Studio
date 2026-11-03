@@ -65,10 +65,10 @@ import java.io.File
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
-    var currentTab by remember { mutableIntStateOf(0) }
+    val currentTab = uiState.currentTab
 
     androidx.activity.compose.BackHandler(enabled = currentTab != 0) {
-        currentTab = 0
+        viewModel.setCurrentTab(0)
     }
 
     Scaffold(
@@ -81,7 +81,7 @@ fun MainScreen(viewModel: MainViewModel) {
             ) {
                 NavigationBarItem(
                     selected = currentTab == 0,
-                    onClick = { currentTab = 0 },
+                    onClick = { viewModel.setCurrentTab(0) },
                     icon = { Icon(Icons.Default.Dvr, "Studio") },
                     label = { Text("Studio") },
                     colors = NavigationBarItemDefaults.colors(
@@ -94,7 +94,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 )
                 NavigationBarItem(
                     selected = currentTab == 1,
-                    onClick = { currentTab = 1 },
+                    onClick = { viewModel.setCurrentTab(1) },
                     icon = { Icon(Icons.Default.Dns, "M3U8 & Streams") },
                     label = { Text("M3U8 & Streams", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = NavigationBarItemDefaults.colors(
@@ -107,7 +107,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 )
                 NavigationBarItem(
                     selected = currentTab == 2,
-                    onClick = { currentTab = 2 },
+                    onClick = { viewModel.setCurrentTab(2) },
                     icon = { Icon(Icons.Default.Share, "Destinations") },
                     label = { Text("Destinations") },
                     colors = NavigationBarItemDefaults.colors(
@@ -120,7 +120,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 )
                 NavigationBarItem(
                     selected = currentTab == 3,
-                    onClick = { currentTab = 3 },
+                    onClick = { viewModel.setCurrentTab(3) },
                     icon = { Icon(Icons.Default.Settings, "Settings") },
                     label = { Text("Settings") },
                     colors = NavigationBarItemDefaults.colors(
@@ -138,13 +138,13 @@ fun MainScreen(viewModel: MainViewModel) {
             when (currentTab) {
                 0 -> StudioPreviewScreen(
                     viewModel = viewModel,
-                    onNavigateToM3u8 = { currentTab = 1 },
-                    onNavigateToDestinations = { currentTab = 2 },
-                    onNavigateToSettings = { currentTab = 3 }
+                    onNavigateToM3u8 = { viewModel.setCurrentTab(1) },
+                    onNavigateToDestinations = { viewModel.setCurrentTab(2) },
+                    onNavigateToSettings = { viewModel.setCurrentTab(3) }
                 )
                 1 -> M3u8StreamsScreen(
                     viewModel = viewModel,
-                    onNavigateToStudio = { currentTab = 0 }
+                    onNavigateToStudio = { viewModel.setCurrentTab(0) }
                 )
                 2 -> DestinationsScreen(viewModel)
                 3 -> AdvancedSettingsScreen(viewModel)
@@ -301,8 +301,25 @@ fun StudioPreviewScreen(
             }
         }
 
-        // 3. NORMAL FULL-SCREEN CAMERA (When no image is set or image display is OFF)
-        if (!hasCustomImage || bgConfig.displayMode == MainViewModel.ImageDisplayMode.OFF) {
+        // 3. M3U8 LIVE STREAM PREVIEW OR CAMERA FEED
+        if (uiState.currentSource == StreamSource.M3U8) {
+            val m3u8Player = remember(uiState.m3u8Url) {
+                viewModel.getRestreamEngine()?.getPlayer()
+            }
+            if (m3u8Player != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = m3u8Player
+                            useController = false
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(0f)
+                )
+            }
+        } else if (!hasCustomImage || bgConfig.displayMode == MainViewModel.ImageDisplayMode.OFF) {
             AndroidView(
                 factory = { openGlView },
                 modifier = Modifier
@@ -420,49 +437,88 @@ fun StudioPreviewScreen(
                 .padding(horizontal = 14.dp, vertical = 6.dp)
                 .zIndex(50f)
         ) {
-            // ROW 1: LIVE BADGE & DESTINATIONS / SETTINGS BUTTONS
+            // ROW 1: LIVE BADGE & SOURCE & DESTINATIONS BADGES
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Live status badge
-                GlassPill(glowColor = if (uiState.isStreaming) Color(0xFFEF4444) else Color.Transparent) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlassPill(glowColor = if (uiState.isStreaming) Color(0xFFEF4444) else Color.Transparent) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            val pulseAlpha by rememberInfiniteTransition().animateFloat(
+                                initialValue = 0.4f,
+                                targetValue = 1.0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(600, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "Pulse"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(9.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (uiState.isStreaming) Color(0xFFEF4444).copy(alpha = pulseAlpha)
+                                        else Color.Gray
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (uiState.isStreaming) "LIVE (${formatTime(uiState.streamTime)})" else "READY",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Source Badge
+                    val sourceText = when (uiState.currentSource) {
+                        StreamSource.M3U8 -> "SOURCE: M3U8"
+                        StreamSource.CAMERA -> "SOURCE: CAM"
+                        StreamSource.SCREEN -> "SOURCE: SCREEN"
+                    }
+                    val sourceColor = when (uiState.currentSource) {
+                        StreamSource.M3U8 -> Color(0xFF10B981)
+                        StreamSource.CAMERA -> Color(0xFF38BDF8)
+                        StreamSource.SCREEN -> Color(0xFF818CF8)
+                    }
+                    Surface(
+                        color = sourceColor.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, sourceColor.copy(alpha = 0.6f))
                     ) {
-                        val pulseAlpha by rememberInfiniteTransition().animateFloat(
-                            initialValue = 0.4f,
-                            targetValue = 1.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(600, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "Pulse"
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(9.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (uiState.isStreaming) Color(0xFFEF4444).copy(alpha = pulseAlpha)
-                                    else Color.Gray
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (uiState.isStreaming) "LIVE" else "OFFLINE",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Black
+                            text = sourceText,
+                            color = sourceColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                         )
-                        Spacer(modifier = Modifier.width(12.dp))
+                    }
+
+                    // Destinations Badge
+                    val enabledDestsCount = uiState.endpoints.count { it.isEnabled && it.streamKey.isNotBlank() }
+                    Surface(
+                        color = Color(0xFFA855F7).copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.6f)),
+                        onClick = { viewModel.setCurrentTab(2) }
+                    ) {
                         Text(
-                            text = formatTime(uiState.streamTime),
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace
+                            text = "DESTS: $enabledDestsCount Active",
+                            color = Color(0xFFA855F7),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                         )
                     }
                 }
