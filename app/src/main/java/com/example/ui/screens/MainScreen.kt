@@ -3,6 +3,7 @@ package com.example.ui.screens
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.media.projection.MediaProjectionManager
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -174,6 +175,36 @@ fun StudioPreviewScreen(
     val sheetState = rememberModalBottomSheetState()
     val bgSheetState = rememberModalBottomSheetState()
 
+    val projectionManager = remember {
+        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+    }
+
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+            viewModel.onScreenCapturePermissionGranted(result.data!!)
+            Toast.makeText(context, "Screen Capture permission granted!", Toast.LENGTH_SHORT).show()
+            if (uiState.isStreaming) {
+                viewModel.startStream(context, result.data)
+            }
+        } else {
+            Toast.makeText(context, "Screen Capture permission declined", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val launchScreenCapture: () -> Unit = {
+        projectionManager?.let { pm ->
+            try {
+                screenCaptureLauncher.launch(pm.createScreenCaptureIntent())
+            } catch (e: Exception) {
+                (context as? MainActivity)?.requestScreenCapture()
+            }
+        } ?: run {
+            (context as? MainActivity)?.requestScreenCapture()
+        }
+    }
+
     // 1. OpenGL Preview Area (Persistent)
     val openGlView = remember {
         OpenGlView(context).apply {
@@ -229,25 +260,34 @@ fun StudioPreviewScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 1. FULL IMAGE MODE (Image front-and-center at exact aspect ratio, camera hidden)
-        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) {
+        // 1. INTERACTIVE BACKGROUND IMAGE LAYER (WITH DIRECT PINCH-TO-ZOOM & PAN GESTURES)
+        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode != MainViewModel.ImageDisplayMode.OFF) {
+            var bgScale by remember(bgConfig.zoom) { mutableFloatStateOf(bgConfig.zoom) }
+            var bgOffsetX by remember(bgConfig.offsetX) { mutableFloatStateOf(bgConfig.offsetX) }
+            var bgOffsetY by remember(bgConfig.offsetY) { mutableFloatStateOf(bgConfig.offsetY) }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .aspectRatio(uiState.streamConfig.aspectRatio.getRatio())
-                    .align(Alignment.Center)
                     .zIndex(0f)
-                    .graphicsLayer {
-                        alpha = bgConfig.opacity.coerceIn(0.1f, 1f)
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            bgScale = (bgScale * zoom).coerceIn(0.5f, 4.0f)
+                            bgOffsetX = (bgOffsetX + pan.x * 0.15f).coerceIn(-100f, 100f)
+                            bgOffsetY = (bgOffsetY + pan.y * 0.15f).coerceIn(-100f, 100f)
+                            viewModel.updateBackgroundConfig(
+                                bgConfig.copy(zoom = bgScale, offsetX = bgOffsetX, offsetY = bgOffsetY)
+                            )
+                        }
                     },
                 contentAlignment = Alignment.Center
             ) {
                 Image(
                     bitmap = bgBitmap.asImageBitmap(),
-                    contentDescription = "Uploaded Broadcast Canvas",
+                    contentDescription = "Interactive Studio Canvas Background",
                     contentScale = when (bgConfig.scaleMode) {
-                        MainViewModel.BackgroundScaleMode.COVER -> ContentScale.Crop
                         MainViewModel.BackgroundScaleMode.CONTAIN -> ContentScale.Fit
+                        MainViewModel.BackgroundScaleMode.COVER -> ContentScale.Crop
                         MainViewModel.BackgroundScaleMode.TOP_BANNER -> ContentScale.FillWidth
                         MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> ContentScale.FillWidth
                         MainViewModel.BackgroundScaleMode.STRETCH -> ContentScale.FillBounds
@@ -255,102 +295,146 @@ fun StudioPreviewScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            scaleX = bgConfig.zoom
-                            scaleY = bgConfig.zoom
-                            translationX = bgConfig.offsetX * 5
-                            translationY = bgConfig.offsetY * 5
+                            scaleX = bgScale
+                            scaleY = bgScale
+                            translationX = bgOffsetX * 5f
+                            translationY = bgOffsetY * 5f
+                            alpha = bgConfig.opacity.coerceIn(0.1f, 1f)
                         }
                 )
             }
         }
 
-        // 2. PiP OVERLAY MODE (Image as full background z-index 0, Camera in top corner PiP window z-index 1)
+        // 2. PiP OVERLAY MODE: Interactive background is full canvas, active feed (CAM, M3U8, or SCREEN) floats in PiP Window (zIndex 10f)
         if (hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) {
-            // Full background image
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(0f),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    bitmap = bgBitmap.asImageBitmap(),
-                    contentDescription = "Background Studio Backdrop",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            // PiP Video Window (Top-End corner)
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 80.dp, end = 16.dp)
-                    .width(130.dp)
+                    .padding(top = 92.dp, end = 16.dp)
+                    .width(140.dp)
                     .aspectRatio(uiState.streamConfig.aspectRatio.getRatio())
-                    .zIndex(1f)
-                    .shadow(12.dp, RoundedCornerShape(12.dp)),
+                    .zIndex(10f)
+                    .shadow(16.dp, RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 border = BorderStroke(2.dp, Color(0xFF38BDF8)),
                 color = Color.Black
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AndroidView(
-                        factory = { openGlView },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Surface(
-                        modifier = Modifier
-                            .padding(4.dp)
-                            .align(Alignment.TopStart),
-                        color = Color.Black.copy(alpha = 0.7f),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Text(
-                            "LIVE CAM",
-                            color = Color(0xFF38BDF8),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                        )
+                    when (uiState.currentSource) {
+                        StreamSource.CAMERA -> {
+                            AndroidView(
+                                factory = { openGlView },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Surface(
+                                modifier = Modifier.padding(4.dp).align(Alignment.TopStart),
+                                color = Color.Black.copy(alpha = 0.75f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    "LIVE CAM",
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        StreamSource.M3U8 -> {
+                            val m3u8Player = remember(uiState.m3u8Url) {
+                                viewModel.getRestreamEngine()?.getPlayer()
+                            }
+                            if (m3u8Player != null) {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        PlayerView(ctx).apply {
+                                            player = m3u8Player
+                                            useController = false
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Surface(
+                                modifier = Modifier.padding(4.dp).align(Alignment.TopStart),
+                                color = Color.Black.copy(alpha = 0.75f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    "LIVE M3U8",
+                                    color = Color(0xFF10B981),
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        StreamSource.SCREEN -> {
+                            ScreenCapturePreviewCard(
+                                isStreaming = uiState.isStreaming,
+                                isReady = viewModel.cachedMediaProjectionResult != null,
+                                onRequestCapture = launchScreenCapture,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // 3. M3U8 LIVE STREAM PREVIEW OR CAMERA FEED
-        if (uiState.currentSource == StreamSource.M3U8) {
-            val m3u8Player = remember(uiState.m3u8Url) {
-                viewModel.getRestreamEngine()?.getPlayer()
-            }
-            if (m3u8Player != null) {
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = m3u8Player
-                            useController = false
+        // 3. FULL SOURCE RENDERING (When PiP is not active and Background Image is not in FULL_IMAGE mode)
+        val isFullImageActive = hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE
+        val isPipActive = hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY
+
+        if (!isFullImageActive && !isPipActive) {
+            when (uiState.currentSource) {
+                StreamSource.M3U8 -> {
+                    if (uiState.m3u8State != MainViewModel.M3u8PlaybackState.STOPPED) {
+                        val m3u8Player = remember(uiState.m3u8Url) {
+                            viewModel.getRestreamEngine()?.getPlayer()
                         }
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .zIndex(0f)
-                )
+                        if (m3u8Player != null) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    PlayerView(ctx).apply {
+                                        player = m3u8Player
+                                        useController = false
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(0f)
+                            )
+                        }
+                    }
+                }
+                StreamSource.CAMERA -> {
+                    AndroidView(
+                        factory = { openGlView },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(0f)
+                    )
+                }
+                StreamSource.SCREEN -> {
+                    ScreenCapturePreviewCard(
+                        isStreaming = uiState.isStreaming,
+                        isReady = viewModel.cachedMediaProjectionResult != null,
+                        onRequestCapture = launchScreenCapture,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(0f)
+                    )
+                }
             }
-        } else if (!hasCustomImage || bgConfig.displayMode == MainViewModel.ImageDisplayMode.OFF) {
-            AndroidView(
-                factory = { openGlView },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(0f)
-            )
         }
 
         // FLOATING IMAGE MODE SWITCHER (Z-INDEX 60f)
-        if (hasCustomImage && bgBitmap != null) {
+        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode != MainViewModel.ImageDisplayMode.OFF) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 64.dp)
+                    .padding(top = 58.dp)
                     .zIndex(60f),
                 color = Color(0xEE0D111C),
                 shape = RoundedCornerShape(20.dp),
@@ -361,20 +445,7 @@ fun StudioPreviewScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("IMAGE:", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Surface(
-                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.FULL_IMAGE) },
-                        color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color(0xFF38BDF8) else Color.Transparent,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(
-                            "FULL",
-                            color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color.Black else Color.White,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
+                    Text("BG IMG:", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Surface(
                         onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.PIP_OVERLAY) },
                         color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) Color(0xFF38BDF8) else Color.Transparent,
@@ -383,6 +454,39 @@ fun StudioPreviewScreen(
                         Text(
                             "PiP OVERLAY",
                             color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) Color.Black else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Surface(
+                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.FULL_IMAGE) },
+                        color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color(0xFF38BDF8) else Color.Transparent,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            "FULL BG",
+                            color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color.Black else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Surface(
+                        onClick = {
+                            val newMode = if (bgConfig.scaleMode == MainViewModel.BackgroundScaleMode.COVER) {
+                                MainViewModel.BackgroundScaleMode.CONTAIN
+                            } else {
+                                MainViewModel.BackgroundScaleMode.COVER
+                            }
+                            viewModel.updateBackgroundConfig(bgConfig.copy(scaleMode = newMode))
+                        },
+                        color = Color(0x3338BDF8),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            if (bgConfig.scaleMode == MainViewModel.BackgroundScaleMode.CONTAIN) "FIT" else "CROP",
+                            color = Color(0xFF38BDF8),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Black,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -591,14 +695,34 @@ fun StudioPreviewScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // ROW 2: STATS PILLS
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatPill(Icons.Default.SignalCellularAlt, if (uiState.isStreaming) "Stable" else "Ready")
-                StatPill(Icons.Default.Speed, "${uiState.currentBitrate} kbps")
-                StatPill(Icons.Default.GraphicEq, "${uiState.fps} FPS")
+                StatPill(Icons.Default.Speed, if (uiState.isStreaming) "${uiState.currentBitrate} kbps" else "0 kbps")
+                StatPill(Icons.Default.GraphicEq, if (uiState.isStreaming) "${uiState.fps} FPS" else "0 FPS")
             }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // ROW 3: REAL-TIME RTMP CONNECTION DIAGNOSTIC PILL
+            RtmpDiagnosticPill(
+                message = if (uiState.isStreaming || uiState.streamingStatus == com.example.core.streaming.StreamingStatus.CONNECTING || uiState.diagnosticIsError) {
+                    uiState.diagnosticMessage
+                } else {
+                    "RTMP: Ready to broadcast"
+                },
+                isError = uiState.diagnosticIsError,
+                isStreaming = uiState.isStreaming,
+                isConnecting = uiState.streamingStatus == com.example.core.streaming.StreamingStatus.CONNECTING,
+                onClick = {
+                    if (uiState.diagnosticIsError) {
+                        Toast.makeText(context, "RTMP Error: ${uiState.diagnosticMessage}. Check Stream Key in Destinations.", Toast.LENGTH_LONG).show()
+                        onNavigateToDestinations()
+                    }
+                }
+            )
 
             Spacer(modifier = Modifier.weight(1f))
 
@@ -658,7 +782,11 @@ fun StudioPreviewScreen(
                                     onNavigateToDestinations()
                                 } else {
                                     if (uiState.currentSource == StreamSource.SCREEN) {
-                                        (context as? MainActivity)?.requestScreenCapture()
+                                        if (viewModel.cachedMediaProjectionResult != null) {
+                                            viewModel.startStream(context, viewModel.cachedMediaProjectionResult)
+                                        } else {
+                                            launchScreenCapture()
+                                        }
                                     } else {
                                         viewModel.startStream(context)
                                     }
@@ -716,6 +844,9 @@ fun StudioPreviewScreen(
                 SourceOptionItem("SCREEN", "Capture device display", Icons.Default.ScreenShare, uiState.currentSource == StreamSource.SCREEN) { 
                     viewModel.toggleSource(StreamSource.SCREEN)
                     showSourceSheet = false 
+                    if (viewModel.cachedMediaProjectionResult == null) {
+                        launchScreenCapture()
+                    }
                 }
                 SourceOptionItem("REMOTE URL", "Restream M3U8/HLS stream", Icons.Default.Link, uiState.currentSource == StreamSource.M3U8) { 
                     viewModel.toggleSource(StreamSource.M3U8)
@@ -739,7 +870,7 @@ fun StudioPreviewScreen(
         ScreenCapturePromptDialog(
             viewModel = viewModel,
             onStartScreenCapture = {
-                (context as? MainActivity)?.requestScreenCapture()
+                launchScreenCapture()
             },
             onDismiss = { viewModel.dismissScreenCapturePrompt() }
         )
@@ -776,6 +907,93 @@ fun StatPill(icon: ImageVector, text: String) {
             Icon(icon, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(12.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text(text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun RtmpDiagnosticPill(
+    message: String,
+    isError: Boolean,
+    isStreaming: Boolean,
+    isConnecting: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    val pillBgColor = when {
+        isError -> Color(0x33EF4444)
+        isConnecting -> Color(0x33F59E0B)
+        isStreaming -> Color(0x2210B981)
+        else -> Color(0x221E2330)
+    }
+    val pillBorderColor = when {
+        isError -> Color(0xFFEF4444)
+        isConnecting -> Color(0xFFF59E0B)
+        isStreaming -> Color(0xFF10B981)
+        else -> Color(0x4438BDF8)
+    }
+    val pillTextColor = when {
+        isError -> Color(0xFFFCA5A5)
+        isConnecting -> Color(0xFFFDE68A)
+        isStreaming -> Color(0xFF6EE7B7)
+        else -> Color(0xFF93C5FD)
+    }
+
+    val pulseAlpha by rememberInfiniteTransition(label = "DiagPulse").animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (isConnecting) 400 else 800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "DiagAlpha"
+    )
+
+    Surface(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
+        color = pillBgColor,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, pillBorderColor.copy(alpha = if (isConnecting || isStreaming) pulseAlpha else 0.8f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            isError -> Color(0xFFEF4444)
+                            isConnecting -> Color(0xFFF59E0B).copy(alpha = pulseAlpha)
+                            isStreaming -> Color(0xFF10B981).copy(alpha = pulseAlpha)
+                            else -> Color(0xFF38BDF8)
+                        }
+                    )
+            )
+            Icon(
+                imageVector = when {
+                    isError -> Icons.Default.WarningAmber
+                    isConnecting -> Icons.Default.Sync
+                    isStreaming -> Icons.Default.Sensors
+                    else -> Icons.Default.Lan
+                },
+                contentDescription = null,
+                tint = pillTextColor,
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                text = message,
+                color = pillTextColor,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -2094,6 +2312,101 @@ fun M3u8ControlDock(
                     ) {
                         Icon(Icons.Default.Dns, "Manage M3U8 Streams", tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ScreenCapturePreviewCard(
+    isStreaming: Boolean,
+    isReady: Boolean,
+    onRequestCapture: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(Color(0xFF090D16)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(24.dp)
+        ) {
+            val pulseAlpha by rememberInfiniteTransition().animateFloat(
+                initialValue = 0.5f,
+                targetValue = 1.0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(800, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "ScreenPulse"
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(90.dp)
+                    .clip(CircleShape)
+                    .background(if (isStreaming) Color(0xFFEF4444).copy(alpha = 0.2f) else Color(0xFF818CF8).copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(if (isStreaming) Color(0xFFEF4444).copy(alpha = 0.35f * pulseAlpha) else Color(0xFF818CF8).copy(alpha = 0.35f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.ScreenShare,
+                        contentDescription = "Screen Capture Active",
+                        tint = if (isStreaming) Color(0xFFEF4444) else Color(0xFF818CF8),
+                        modifier = Modifier.size(38.dp)
+                    )
+                }
+            }
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(
+                    color = if (isStreaming) Color(0xFFEF4444).copy(alpha = 0.2f) else Color(0xFF818CF8).copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, if (isStreaming) Color(0xFFEF4444) else Color(0xFF818CF8))
+                ) {
+                    Text(
+                        text = if (isStreaming) "LIVE SCREEN BROADCASTING" else if (isReady) "SCREEN READY TO BROADCAST" else "SCREEN CAPTURE PENDING",
+                        color = if (isStreaming) Color(0xFFEF4444) else Color(0xFF818CF8),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+
+                Text(
+                    text = "Entire Android Display Feed",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Games, tutorials, and applications will broadcast directly to active destinations.",
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            if (!isReady && !isStreaming) {
+                Button(
+                    onClick = onRequestCapture,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF818CF8)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(44.dp)
+                ) {
+                    Icon(Icons.Default.Security, null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("GRANT SCREEN PERMISSION", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 11.sp)
                 }
             }
         }

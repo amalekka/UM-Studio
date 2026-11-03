@@ -116,6 +116,8 @@ dependencies {
   implementation(libs.media3.ui)
   implementation("com.github.pedroSG94.RootEncoder:library:2.4.5")
   implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:6.0.3")
+  implementation("com.arthenica:smart-exception-java:0.2.1")
+  implementation("com.arthenica:smart-exception-common:0.2.1")
   implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)

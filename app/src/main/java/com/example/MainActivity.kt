@@ -57,7 +57,11 @@ class MainActivity : ComponentActivity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val s = (binder as LiveStreamService.LocalBinder).getService()
             service = s
-            viewModel?.onServiceConnected(s)
+            try {
+                viewModel?.onServiceConnected(s)
+            } catch (t: Throwable) {
+                android.util.Log.e("MainActivity", "Error in onServiceConnected: ${t.message}", t)
+            }
             isBound = true
         }
 

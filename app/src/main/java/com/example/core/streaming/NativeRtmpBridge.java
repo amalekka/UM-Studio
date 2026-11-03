@@ -31,17 +31,21 @@ public class NativeRtmpBridge {
     }
 
     private void initBridge() {
-        FFmpegKitConfig.setLogLevel(Level.AV_LOG_INFO);
-        FFmpegKitConfig.enableStatisticsCallback(statistics -> {
-            int kbps = (int) statistics.getBitrate();
-            int fps = (int) statistics.getVideoFps();
-            Log.d(TAG, "Stats: " + kbps + " kbps, " + fps + " fps");
-            if (webView != null) {
-                webView.post(() -> {
-                    webView.evaluateJavascript("window.onNativeStreamStats && window.onNativeStreamStats(" + kbps + ", " + fps + ");", null);
-                });
-            }
-        });
+        try {
+            FFmpegKitConfig.setLogLevel(Level.AV_LOG_INFO);
+            FFmpegKitConfig.enableStatisticsCallback(statistics -> {
+                int kbps = (int) statistics.getBitrate();
+                int fps = (int) statistics.getVideoFps();
+                Log.d(TAG, "Stats: " + kbps + " kbps, " + fps + " fps");
+                if (webView != null) {
+                    webView.post(() -> {
+                        webView.evaluateJavascript("window.onNativeStreamStats && window.onNativeStreamStats(" + kbps + ", " + fps + ");", null);
+                    });
+                }
+            });
+        } catch (Throwable t) {
+            Log.e(TAG, "Error initializing FFmpegKit in bridge: " + t.getMessage(), t);
+        }
     }
 
     @JavascriptInterface

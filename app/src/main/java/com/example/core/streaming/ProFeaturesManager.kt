@@ -147,6 +147,10 @@ class ProFeaturesManager(
         _streamLogs.value = current
     }
 
+    fun stopMultiStreaming() {
+        stopAll()
+    }
+
     fun stopAll() {
         tickerJob?.cancel()
         extraRtmpClients.forEach { it.second.disconnect() }

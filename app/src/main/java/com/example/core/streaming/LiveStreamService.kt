@@ -136,6 +136,7 @@ class LiveStreamService : Service(), ConnectChecker {
 
     // ConnectChecker implementation
     override fun onConnectionStarted(url: String) {
+        streamEngineManager?.onConnectionStarted(url)
         updateNotification("Connecting to stream...")
     }
 
@@ -159,7 +160,7 @@ class LiveStreamService : Service(), ConnectChecker {
     }
 
     override fun onAuthError() {
-        streamEngineManager?.onConnectionFailed("Auth Error")
+        streamEngineManager?.onAuthError()
         updateNotification("Auth Error")
     }
 

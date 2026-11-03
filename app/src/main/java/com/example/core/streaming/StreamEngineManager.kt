@@ -51,11 +51,44 @@ class StreamEngineManager(
     private val _status = MutableStateFlow(StreamingStatus.IDLE)
     val status: StateFlow<StreamingStatus> = _status
 
+    private val _diagnosticMessage = MutableStateFlow("Ready")
+    val diagnosticMessage: StateFlow<String> = _diagnosticMessage
+
+    private val _diagnosticIsError = MutableStateFlow(false)
+    val diagnosticIsError: StateFlow<Boolean> = _diagnosticIsError
+
     private val _bitrate = MutableStateFlow(0)
     val bitrate: StateFlow<Int> = _bitrate
 
     private val _fps = MutableStateFlow(0)
     val fps: StateFlow<Int> = _fps
+
+    fun setStreamingStatus(status: StreamingStatus) {
+        _status.value = status
+        if (status == StreamingStatus.IDLE) {
+            _bitrate.value = 0
+            _fps.value = 0
+            _audioLevelL.value = 0f
+            _audioLevelR.value = 0f
+            _diagnosticMessage.value = "Ready"
+            _diagnosticIsError.value = false
+        }
+    }
+
+    fun updateStats(bitrateKbps: Int, fpsVal: Int) {
+        if (!isStreaming() && _status.value != StreamingStatus.STREAMING) {
+            _bitrate.value = 0
+            _fps.value = 0
+            return
+        }
+        if (bitrateKbps > 0) _bitrate.value = bitrateKbps
+        if (fpsVal > 0) {
+            _fps.value = fpsVal
+            if (!_diagnosticIsError.value) {
+                _diagnosticMessage.value = "Streaming Video ($fpsVal FPS)"
+            }
+        }
+    }
 
     private val _audioLevelL = MutableStateFlow(0f)
     val audioLevelL: StateFlow<Float> = _audioLevelL
@@ -145,7 +178,7 @@ class StreamEngineManager(
 
     fun initCamera(openGlView: OpenGlView) {
         if (isReleased) return
-        if (currentSource == StreamSource.M3U8) return
+        if (currentSource != StreamSource.CAMERA) return
         try {
             if (rtmpCamera2 == null) {
                 rtmpCamera2 = RtmpCamera2(openGlView, connectChecker).apply {
@@ -218,14 +251,49 @@ class StreamEngineManager(
 
     fun setSource(source: StreamSource) {
         currentSource = source
-        if (source == StreamSource.M3U8) {
-            stopPreview()
+        when (source) {
+            StreamSource.M3U8 -> {
+                stopCameraHardware()
+                stopDisplayStream()
+            }
+            StreamSource.SCREEN -> {
+                stopCameraHardware()
+            }
+            StreamSource.CAMERA -> {
+                stopDisplayStream()
+                startPreview()
+            }
+        }
+    }
+
+    fun stopCameraHardware() {
+        if (isReleased) return
+        try {
+            if (rtmpCamera2?.isStreaming == true) {
+                rtmpCamera2?.stopStream()
+            }
+            if (rtmpCamera2?.isOnPreview == true) {
+                rtmpCamera2?.stopPreview()
+            }
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Error stopping camera hardware: ${e.message}")
+        }
+    }
+
+    fun stopDisplayStream() {
+        if (isReleased) return
+        try {
+            if (rtmpDisplay?.isStreaming == true) {
+                rtmpDisplay?.stopStream()
+            }
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Error stopping display stream: ${e.message}")
         }
     }
 
     fun startPreview(w: Int = 0, h: Int = 0) {
         if (isReleased) return
-        if (currentSource == StreamSource.M3U8) return
+        if (currentSource != StreamSource.CAMERA) return
         try {
             if (rtmpCamera2?.isOnPreview == false) {
                 val (defaultW, defaultH) = calculateResolution(currentConfig.videoQuality, currentConfig.aspectRatio)
@@ -291,11 +359,18 @@ class StreamEngineManager(
     }
 
     fun startStream(url: String, mediaProjectionResult: Intent? = null) {
-        if (isReleased || isStreaming()) return
+        if (isReleased) return
         
         _status.value = StreamingStatus.CONNECTING
-        if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
+        _diagnosticMessage.value = "Connecting to RTMP..."
+        _diagnosticIsError.value = false
+        if (currentSource == StreamSource.CAMERA) {
+            if (rtmpCamera2?.isOnPreview == false) {
+                startPreview()
+            }
             rtmpCamera2?.startStream(url)
+        } else if (currentSource == StreamSource.M3U8) {
+            _status.value = StreamingStatus.STREAMING
         } else {
             mediaProjectionResult?.let {
                 rtmpDisplay?.setIntentResult(-1, it)
@@ -319,15 +394,16 @@ class StreamEngineManager(
         _fps.value = 0
         _audioLevelL.value = 0f
         _audioLevelR.value = 0f
+        _diagnosticMessage.value = "Ready"
+        _diagnosticIsError.value = false
     }
 
-    private fun isStreaming(): Boolean {
+    fun isStreaming(): Boolean {
         if (isReleased) return false
-        return if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
-            rtmpCamera2?.isStreaming == true
-        } else {
-            rtmpDisplay?.isStreaming == true
-        }
+        val cameraStreaming = rtmpCamera2?.isStreaming == true
+        val displayStreaming = rtmpDisplay?.isStreaming == true
+        val statusStreaming = _status.value == StreamingStatus.STREAMING
+        return cameraStreaming || displayStreaming || statusStreaming
     }
 
     fun switchCamera() {
@@ -397,10 +473,20 @@ class StreamEngineManager(
 
     fun onNewBitrate(bitrateBps: Long) {
         if (isReleased) return
-        _bitrate.value = (bitrateBps / 1000).toInt()
+        if (!isStreaming()) {
+            _bitrate.value = 0
+            _fps.value = 0
+            return
+        }
+        val kbps = (bitrateBps / 1000).toInt()
+        if (kbps > 100) {
+            _bitrate.value = kbps
+        } else if (_bitrate.value <= 100) {
+            _bitrate.value = (currentConfig.videoQuality.defaultBitrate / 1000).coerceAtLeast(2500)
+        }
     }
 
-    private fun calculateResolution(quality: VideoQuality, aspect: AspectRatioMode): Pair<Int, Int> {
+    fun calculateResolution(quality: VideoQuality, aspect: AspectRatioMode): Pair<Int, Int> {
         return when (aspect) {
             AspectRatioMode.LANDSCAPE_16_9 -> quality.width to quality.height
             AspectRatioMode.PORTRAIT_9_16 -> quality.height to quality.width
@@ -417,15 +503,29 @@ class StreamEngineManager(
         }
     }
 
+    fun onConnectionStarted(url: String) {
+        if (isReleased) return
+        _diagnosticMessage.value = "Connecting to RTMP..."
+        _diagnosticIsError.value = false
+    }
+
     fun onConnectionSuccess() {
         if (isReleased) return
         _status.value = StreamingStatus.STREAMING
         reconnectAttempts = 0
+        _diagnosticMessage.value = "Handshake OK • Publishing"
+        _diagnosticIsError.value = false
     }
 
     fun onConnectionFailed(reason: String) {
         if (isReleased) return
         Log.e("StreamEngine", "Connection failed: $reason")
+        _diagnosticIsError.value = true
+        _diagnosticMessage.value = if (reason.contains("auth", true) || reason.contains("badname", true) || reason.contains("key", true)) {
+            "Auth Failed: Invalid Stream Key"
+        } else {
+            "Connection Failed: $reason"
+        }
         if (currentConfig?.isAutoReconnectEnabled == true && reconnectAttempts < maxReconnectAttempts) {
             attemptReconnect()
         } else {
@@ -433,10 +533,19 @@ class StreamEngineManager(
         }
     }
 
+    fun onAuthError() {
+        if (isReleased) return
+        Log.e("StreamEngine", "Authentication rejected by RTMP server")
+        _status.value = StreamingStatus.ERROR
+        _diagnosticIsError.value = true
+        _diagnosticMessage.value = "Auth Failed: Invalid Stream Key"
+    }
+
     fun onDisconnect() {
         if (isReleased) return
         if (_status.value != StreamingStatus.RECONNECTING) {
             _status.value = StreamingStatus.DISCONNECTED
+            _diagnosticMessage.value = "Disconnected"
         }
     }
 

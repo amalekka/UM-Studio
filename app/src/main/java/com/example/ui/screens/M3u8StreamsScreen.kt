@@ -132,7 +132,8 @@ fun M3u8StreamsScreen(
                     onCopyUrl = {
                         clipboardManager.setText(AnnotatedString(uiState.m3u8Url))
                         Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
-                    }
+                    },
+                    onToggleStreamCopy = { viewModel.setPreferM3u8StreamCopy(it) }
                 )
             }
 
@@ -280,7 +281,8 @@ fun ActiveStreamControllerCard(
     onForceStop: () -> Unit,
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
-    onCopyUrl: () -> Unit
+    onCopyUrl: () -> Unit,
+    onToggleStreamCopy: (Boolean) -> Unit = {}
 ) {
     val statusColor = when (uiState.m3u8State) {
         MainViewModel.M3u8PlaybackState.PLAYING -> Color(0xFF10B981)
@@ -452,6 +454,33 @@ fun ActiveStreamControllerCard(
                         inactiveTrackColor = Color.White.copy(alpha = 0.1f)
                     ),
                     modifier = Modifier.fillMaxWidth().height(28.dp)
+                )
+            }
+
+            // Ultra-Fast Stream Copy Switch (Zero CPU Lag)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0x331E293B))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Bolt, null, tint = Color(0xFF10B981), modifier = Modifier.size(15.dp))
+                        Text("ULTRA-FAST STREAM COPY", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Text("Direct passthrough without re-encoding (0% CPU, 60 FPS)", color = Color.Gray, fontSize = 9.sp)
+                }
+                Switch(
+                    checked = uiState.preferM3u8StreamCopy,
+                    onCheckedChange = onToggleStreamCopy,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF10B981),
+                        checkedTrackColor = Color(0x6610B981)
+                    )
                 )
             }
 
