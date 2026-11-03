@@ -212,17 +212,21 @@ jobs:
                   new Thread(() -> {
                       try {
                           stopStream();
-                          if (m3u8Url == null || m3u8Url.isEmpty()) return;
-                          String cleanUrl = m3u8Url.replaceAll("[\"']", "").trim();
+                          String cleanUrl = m3u8Url != null ? m3u8Url.trim() : "";
+                          if (cleanUrl.isEmpty()) {
+                              android.util.Log.e("NativeRtmpBridge", "Cannot start M3U8 restream: M3U8 URL is empty or null");
+                              return;
+                          }
 
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
-                          if (outArgs == null || outArgs.isEmpty()) return;
+                          if (outArgs == null || outArgs.isEmpty()) {
+                              android.util.Log.e("NativeRtmpBridge", "Cannot start M3U8 restream: Output RTMP arguments are empty");
+                              return;
+                          }
 
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
                           int gop = targetFps * 2;
-                          int w = width > 0 ? width : 1280;
-                          int h = height > 0 ? height : 720;
 
                           String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
                               + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "

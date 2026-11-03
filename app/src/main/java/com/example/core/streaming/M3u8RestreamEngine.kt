@@ -69,85 +69,119 @@ class M3u8RestreamEngine(
         url: String,
         headers: Map<String, String> = emptyMap()
     ) {
-        this.currentM3u8Url = url
+        val clean = url.trim().removeSurrounding("\"").removeSurrounding("'")
+        if (clean.isBlank()) {
+            Log.e("M3u8Engine", "Cannot setup restream: URL is blank")
+            return
+        }
+        val isSameUrl = (this.currentM3u8Url == clean)
+        this.currentM3u8Url = clean
         this.customHeaders = headers
+
+        val task = {
+            try {
+                if (isSameUrl && exoPlayer != null) {
+                    exoPlayer?.play()
+                } else {
+                    initializePlayer()
+                }
+            } catch (e: Throwable) {
+                Log.e("M3u8Engine", "Error setting up player: ${e.message}", e)
+            }
+        }
+
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            initializePlayer()
+            task()
         } else {
             Handler(Looper.getMainLooper()).post {
-                initializePlayer()
+                task()
             }
         }
     }
 
     private fun initializePlayer() {
-        releasePlayer()
+        val url = currentM3u8Url
+        if (url.isNullOrBlank()) return
 
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("LiveStreamPro/1.0")
-            .setDefaultRequestProperties(customHeaders)
-            .setAllowCrossProtocolRedirects(true)
+        try {
+            val dataSourceFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent("LiveStreamPro/1.0")
+                .setDefaultRequestProperties(customHeaders)
+                .setAllowCrossProtocolRedirects(true)
 
-        val mediaSource = HlsMediaSource.Factory(dataSourceFactory)
-            .createMediaSource(MediaItem.fromUri(Uri.parse(currentM3u8Url)))
+            val mediaSource = HlsMediaSource.Factory(dataSourceFactory)
+                .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
 
-        exoPlayer = ExoPlayer.Builder(context).build().apply {
-            setMediaSource(mediaSource)
-            repeatMode = Player.REPEAT_MODE_ALL
-            playWhenReady = true
-            
-            addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    when (state) {
-                        Player.STATE_BUFFERING -> _isSourceLoading.value = true
-                        Player.STATE_READY -> {
-                            _isSourceLoading.value = false
-                            _sourceError.value = null
+            if (exoPlayer == null) {
+                exoPlayer = ExoPlayer.Builder(context).build().apply {
+                    setMediaSource(mediaSource)
+                    repeatMode = Player.REPEAT_MODE_ALL
+                    playWhenReady = true
+                    
+                    addListener(object : Player.Listener {
+                        override fun onPlaybackStateChanged(state: Int) {
+                            when (state) {
+                                Player.STATE_BUFFERING -> _isSourceLoading.value = true
+                                Player.STATE_READY -> {
+                                    _isSourceLoading.value = false
+                                    _sourceError.value = null
+                                }
+                                Player.STATE_ENDED -> restartStream()
+                            }
                         }
-                        Player.STATE_ENDED -> restartStream()
-                    }
-                }
 
-                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    Log.e("M3u8Engine", "Player error: ${error.message}")
-                    _sourceError.value = error.message
-                    _isSourceLoading.value = false
-                    recoverFromError()
-                }
-            })
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            Log.e("M3u8Engine", "Player error: ${error.message}")
+                            _sourceError.value = error.message
+                            _isSourceLoading.value = false
+                            recoverFromError()
+                        }
+                    })
 
-            addAnalyticsListener(object : AnalyticsListener {
-                override fun onVideoFrameProcessingOffset(
-                    eventTime: AnalyticsListener.EventTime,
-                    totalProcessingOffsetUs: Long,
-                    frameCount: Int
-                ) {
-                    if (frameCount > 0 && _m3u8Fps.value == 0) {
-                        _m3u8Fps.value = 30
-                    }
-                }
+                    addAnalyticsListener(object : AnalyticsListener {
+                        override fun onVideoFrameProcessingOffset(
+                            eventTime: AnalyticsListener.EventTime,
+                            totalProcessingOffsetUs: Long,
+                            frameCount: Int
+                        ) {
+                            if (frameCount > 0 && _m3u8Fps.value == 0) {
+                                _m3u8Fps.value = 30
+                            }
+                        }
 
-                override fun onRenderedFirstFrame(
-                    eventTime: AnalyticsListener.EventTime,
-                    output: Any,
-                    renderTimeMs: Long
-                ) {
-                    if (_m3u8Fps.value == 0) {
-                        _m3u8Fps.value = 30
-                    }
-                }
+                        override fun onRenderedFirstFrame(
+                            eventTime: AnalyticsListener.EventTime,
+                            output: Any,
+                            renderTimeMs: Long
+                        ) {
+                            if (_m3u8Fps.value == 0) {
+                                _m3u8Fps.value = 30
+                            }
+                        }
 
-                override fun onVideoDisabled(
-                    eventTime: AnalyticsListener.EventTime,
-                    decoderCounters: DecoderCounters
-                ) {
-                    if (!_isRestreaming.value) {
-                        _m3u8Fps.value = 0
-                    }
-                }
-            })
+                        override fun onVideoDisabled(
+                            eventTime: AnalyticsListener.EventTime,
+                            decoderCounters: DecoderCounters
+                        ) {
+                            if (!_isRestreaming.value) {
+                                _m3u8Fps.value = 0
+                            }
+                        }
+                    })
 
-            prepare()
+                    prepare()
+                }
+            } else {
+                exoPlayer?.let { player ->
+                    player.setMediaSource(mediaSource)
+                    player.prepare()
+                    player.playWhenReady = true
+                }
+            }
+        } catch (e: Throwable) {
+            Log.e("M3u8Engine", "Failed to initialize player: ${e.message}", e)
+            _sourceError.value = e.message
+            _isSourceLoading.value = false
         }
     }
 
@@ -201,58 +235,66 @@ class M3u8RestreamEngine(
         preferStreamCopy: Boolean = true,
         canStreamCopyOverride: Boolean? = null
     ) {
-        val rawM3u8 = currentM3u8Url
-        if (rawM3u8.isNullOrBlank()) {
-            Log.e("M3u8Engine", "Cannot start restreaming: M3U8 URL is empty")
-            return
-        }
-        val m3u8 = rawM3u8.trim().removeSurrounding("\"").removeSurrounding("'")
-
-        _isRestreaming.value = true
-        _diagnosticMessage.value = "Connecting to RTMP..."
-        _diagnosticIsError.value = false
-        streamManager.setStreamingStatus(StreamingStatus.STREAMING)
-
-        play()
-        startStatsMonitor(config)
-
-        val targets = if (allUrls.isNotEmpty()) allUrls else listOf(primaryUrl)
-        val outArgs = if (targets.size == 1) {
-            "-f flv \"${targets[0]}\""
-        } else {
-            val teeList = targets.joinToString("|") { "[f=flv:onfail=ignore]$it" }
-            "-f tee -map 0:v -map 0:a? \"$teeList\""
-        }
-
-        val fps = if (config.videoQuality.fps > 0) config.videoQuality.fps else 30
-        val bitrateKbps = (config.videoQuality.defaultBitrate / 1000).coerceIn(1500, 4500)
-        val gop = fps * 2
-
-        // Check if stream is H.264 compatible without accessing exoPlayer on background threads
-        val canStreamCopy = canStreamCopyOverride ?: run {
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                (preferStreamCopy && isH264Source() && !hasOverlay)
-            } else {
-                false
+        try {
+            val rawM3u8 = currentM3u8Url
+            val cleanUrl = (rawM3u8 ?: "").trim().removeSurrounding("\"").removeSurrounding("'")
+            if (cleanUrl.isEmpty()) {
+                Log.e("M3u8Engine", "Cannot start restreaming: M3U8 URL is empty or null")
+                _diagnosticMessage.value = "Invalid M3U8 URL"
+                _diagnosticIsError.value = true
+                return
             }
+
+            _isRestreaming.value = true
+            _diagnosticMessage.value = "Connecting to RTMP..."
+            _diagnosticIsError.value = false
+            streamManager.setStreamingStatus(StreamingStatus.STREAMING)
+
+            try { play() } catch (e: Throwable) {}
+            try { startStatsMonitor(config) } catch (e: Throwable) {}
+
+            val targets = if (allUrls.isNotEmpty()) allUrls else listOf(primaryUrl)
+            val outArgs = if (targets.size == 1) {
+                "-f flv \"${targets[0].trim().removeSurrounding("\"").removeSurrounding("'")}\""
+            } else {
+                val teeList = targets.joinToString("|") { "[f=flv:onfail=ignore]${it.trim().removeSurrounding("\"").removeSurrounding("'")}" }
+                "-f tee -map 0:v -map 0:a? \"$teeList\""
+            }
+
+            val fps = if (config.videoQuality.fps > 0) config.videoQuality.fps else 30
+            val bitrateKbps = (config.videoQuality.defaultBitrate / 1000).coerceIn(1500, 4500)
+            val gop = fps * 2
+
+            // Check if stream is H.264 compatible without accessing exoPlayer on background threads
+            val canStreamCopy = canStreamCopyOverride ?: run {
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    (preferStreamCopy && isH264Source() && !hasOverlay)
+                } else {
+                    false
+                }
+            }
+
+            val headerPrefix = if (customHeaders.isNotEmpty()) {
+                val hLines = customHeaders.entries.joinToString("\r\n") { "${it.key}: ${it.value}" } + "\r\n"
+                "-headers \"$hLines\" "
+            } else ""
+
+            val vCodecArgs = if (canStreamCopy) {
+                "-c:v copy"
+            } else {
+                "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+            }
+
+            val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$cleanUrl\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+            Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
+
+            try { stopFfmpeg() } catch (e: Throwable) {}
+            executeFfmpegCommand(cmd, canStreamCopy, config, outArgs, headerPrefix, cleanUrl, fps, gop, bitrateKbps)
+        } catch (e: Throwable) {
+            Log.e("M3u8Engine", "Fatal error in startRestreaming", e)
+            _diagnosticMessage.value = "Restream Error: ${e.message}"
+            _diagnosticIsError.value = true
         }
-
-        val headerPrefix = if (customHeaders.isNotEmpty()) {
-            val hLines = customHeaders.entries.joinToString("\r\n") { "${it.key}: ${it.value}" } + "\r\n"
-            "-headers \"$hLines\" "
-        } else ""
-
-        val vCodecArgs = if (canStreamCopy) {
-            "-c:v copy"
-        } else {
-            "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
-        }
-
-        val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$m3u8\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
-        Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
-
-        stopFfmpeg()
-        executeFfmpegCommand(cmd, canStreamCopy, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
     }
 
     private fun executeFfmpegCommand(
@@ -266,47 +308,52 @@ class M3u8RestreamEngine(
         gop: Int,
         bitrateKbps: Int
     ) {
-        ffmpegSession = FFmpegKit.executeAsync(cmd, { session ->
-            Log.i("M3u8Engine", "FFmpeg restream completed with state: ${session.state}, code: ${session.returnCode}")
-            val returnCode = session.returnCode
-            if (com.arthenica.ffmpegkit.ReturnCode.isCancel(returnCode)) {
-                Log.i("M3u8Engine", "FFmpeg session was cancelled.")
-                return@executeAsync
-            }
-            if (_isRestreaming.value && allowFallbackToTranscode && session.returnCode?.isValueSuccess != true) {
-                Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
-                _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
-                _diagnosticIsError.value = false
-                val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
-                executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
-            } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
-                val logs = session.allLogsAsString ?: ""
-                if (logs.contains("Did you mean file:https", ignoreCase = true) && m3u8.startsWith("https://")) {
-                    Log.w("M3u8Engine", "HTTPS protocol failed. Retrying with HTTP fallback...")
-                    _diagnosticMessage.value = "Protocol Fallback • Connecting..."
-                    _diagnosticIsError.value = false
-                    val httpUrl = m3u8.replaceFirst("https://", "http://")
-                    val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
-                    val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$httpUrl\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
-                    executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
-                    return@executeAsync
-                }
-                val meaningfulError = logs.lineSequence()
-                    .map { it.trim() }
-                    .filter { line ->
-                        line.isNotEmpty() &&
-                        !line.startsWith("configuration:", true) &&
-                        !line.startsWith("libav", true) &&
-                        !line.startsWith("Hyper Fast", true) &&
-                        !line.startsWith("built with", true) &&
-                        !line.contains("frame=", true)
+        try {
+            ffmpegSession = FFmpegKit.executeAsync(cmd, { session ->
+                try {
+                    Log.i("M3u8Engine", "FFmpeg restream completed with state: ${session.state}, code: ${session.returnCode}")
+                    val returnCode = session.returnCode
+                    if (com.arthenica.ffmpegkit.ReturnCode.isCancel(returnCode)) {
+                        Log.i("M3u8Engine", "FFmpeg session was cancelled.")
+                        return@executeAsync
                     }
-                    .lastOrNull() ?: "Session Closed"
-                val cleanError = if (meaningfulError.length > 50) meaningfulError.take(50) + "..." else meaningfulError
-                _diagnosticMessage.value = "RTMP Error: $cleanError"
-                _diagnosticIsError.value = true
-            }
-        }, { log ->
+                    if (_isRestreaming.value && allowFallbackToTranscode && session.returnCode?.isValueSuccess != true) {
+                        Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
+                        _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
+                        _diagnosticIsError.value = false
+                        val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                        executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
+                    } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
+                        val logs = session.allLogsAsString ?: ""
+                        if (logs.contains("Did you mean file:https", ignoreCase = true) && m3u8.startsWith("https://")) {
+                            Log.w("M3u8Engine", "HTTPS protocol failed. Retrying with HTTP fallback...")
+                            _diagnosticMessage.value = "Protocol Fallback • Connecting..."
+                            _diagnosticIsError.value = false
+                            val httpUrl = m3u8.replaceFirst("https://", "http://")
+                            val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$httpUrl\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
+                            return@executeAsync
+                        }
+                        val meaningfulError = logs.lineSequence()
+                            .map { it.trim() }
+                            .filter { line ->
+                                line.isNotEmpty() &&
+                                !line.startsWith("configuration:", true) &&
+                                !line.startsWith("libav", true) &&
+                                !line.startsWith("Hyper Fast", true) &&
+                                !line.startsWith("built with", true) &&
+                                !line.contains("frame=", true)
+                            }
+                            .lastOrNull() ?: "Session Closed"
+                        val cleanError = if (meaningfulError.length > 50) meaningfulError.take(50) + "..." else meaningfulError
+                        _diagnosticMessage.value = "RTMP Error: $cleanError"
+                        _diagnosticIsError.value = true
+                    }
+                } catch (e: Throwable) {
+                    Log.e("M3u8Engine", "Error in FFmpeg completion callback", e)
+                }
+            }, { log ->
             val msg = log.message ?: ""
             Log.d("M3u8Engine", "FFmpeg: $msg")
             when {
@@ -348,6 +395,11 @@ class M3u8RestreamEngine(
                 streamManager.updateStats(kbps, finalFps)
             }
         })
+        } catch (e: Throwable) {
+            Log.e("M3u8Engine", "Fatal error executing FFmpeg command", e)
+            _diagnosticMessage.value = "FFmpeg Start Error: ${e.message}"
+            _diagnosticIsError.value = true
+        }
     }
 
     fun setPiPMode(isEnabled: Boolean) {

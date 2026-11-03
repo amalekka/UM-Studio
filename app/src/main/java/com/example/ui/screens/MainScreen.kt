@@ -380,6 +380,14 @@ fun StudioPreviewScreen(
                                             useController = false
                                         }
                                     },
+                                    update = { view ->
+                                        if (view.player != m3u8Player) {
+                                            view.player = m3u8Player
+                                        }
+                                    },
+                                    onRelease = { view ->
+                                        view.player = null
+                                    },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -428,6 +436,14 @@ fun StudioPreviewScreen(
                                         player = m3u8Player
                                         useController = false
                                     }
+                                },
+                                update = { view ->
+                                    if (view.player != m3u8Player) {
+                                        view.player = m3u8Player
+                                    }
+                                },
+                                onRelease = { view ->
+                                    view.player = null
                                 },
                                 modifier = Modifier
                                     .fillMaxSize()

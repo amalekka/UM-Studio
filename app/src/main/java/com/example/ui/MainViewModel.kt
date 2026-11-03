@@ -609,10 +609,15 @@ class MainViewModel : ViewModel() {
 
                             // 1. ALL ExoPlayer setup, playback and format reading MUST run on Dispatchers.Main
                             val canStreamCopy = withContext(Dispatchers.Main) {
-                                restreamEngine.setupRestream(cleanUrl, m3u8Headers)
-                                restreamEngine.play()
-                                val isH264 = restreamEngine.isH264Source()
-                                (preferStreamCopy && isH264 && !hasOverlay)
+                                try {
+                                    restreamEngine.setupRestream(cleanUrl, m3u8Headers)
+                                    restreamEngine.play()
+                                    val isH264 = restreamEngine.isH264Source()
+                                    (preferStreamCopy && isH264 && !hasOverlay)
+                                } catch (e: Throwable) {
+                                    Log.e("MainViewModel", "Error in setupRestream on Main: ${e.message}", e)
+                                    false
+                                }
                             }
 
                             // 2. Keep ONLY FFmpegKit execution and RTMP sockets on Dispatchers.IO

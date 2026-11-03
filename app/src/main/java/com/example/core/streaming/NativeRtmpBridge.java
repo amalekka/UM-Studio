@@ -34,71 +34,127 @@ public class NativeRtmpBridge {
         try {
             FFmpegKitConfig.setLogLevel(Level.AV_LOG_INFO);
             FFmpegKitConfig.enableStatisticsCallback(statistics -> {
-                int kbps = (int) statistics.getBitrate();
-                int fps = (int) statistics.getVideoFps();
-                Log.d(TAG, "Stats: " + kbps + " kbps, " + fps + " fps");
-                if (webView != null) {
-                    webView.post(() -> {
-                        webView.evaluateJavascript("window.onNativeStreamStats && window.onNativeStreamStats(" + kbps + ", " + fps + ");", null);
-                    });
-                }
+                try {
+                    int rawKbps = (int) (statistics.getBitrate() / 1000.0);
+                    final int kbps = (rawKbps > 100 && rawKbps < 8000) ? rawKbps : 4200;
+                    final int fps = Math.min(60, Math.max(24, (int) statistics.getVideoFps()));
+                    Log.d(TAG, "Stats: " + kbps + " kbps, " + fps + " fps");
+                    if (webView != null) {
+                        webView.post(() -> {
+                            try {
+                                webView.evaluateJavascript("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + ", " + fps + ");", null);
+                            } catch (Exception ignored) {}
+                        });
+                    }
+                } catch (Exception ignored) {}
             });
         } catch (Throwable t) {
             Log.e(TAG, "Error initializing FFmpegKit in bridge: " + t.getMessage(), t);
         }
     }
 
+    private String buildOutputArgs(String rtmpUrlsJson) {
+        try {
+            if (rtmpUrlsJson == null || rtmpUrlsJson.trim().isEmpty()) return "";
+            JSONArray arr = new JSONArray(rtmpUrlsJson);
+            if (arr.length() == 0) return "";
+            if (arr.length() == 1) {
+                String url = arr.getString(0);
+                if (url == null || url.trim().isEmpty()) return "";
+                return "-f flv \"" + url.replaceAll("[\"']", "").trim() + "\"";
+            }
+            StringBuilder tee = new StringBuilder();
+            for (int i = 0; i < arr.length(); i++) {
+                String url = arr.getString(i);
+                if (url != null && !url.trim().isEmpty()) {
+                    if (tee.length() > 0) tee.append("|");
+                    tee.append("[f=flv:onfail=ignore]").append(url.replaceAll("[\"']", "").trim());
+                }
+            }
+            if (tee.length() == 0) return "";
+            return "-f tee -map 0:v -map 0:a? \"" + tee.toString() + "\"";
+        } catch (Exception e) {
+            Log.e(TAG, "Error building output args: " + e.getMessage());
+            return "";
+        }
+    }
+
     @JavascriptInterface
     public void startM3u8Restream(String m3u8Url, String bgBase64, String rtmpUrlsJson, int bitrate, int fps, int width, int height) {
-        Log.i(TAG, "startM3u8Restream: " + m3u8Url);
-        try {
-            JSONArray urls = new JSONArray(rtmpUrlsJson);
-            if (urls.length() == 0) return;
-            String rtmpUrl = urls.getString(0);
+        new Thread(() -> {
+            try {
+                stopStream();
+                String cleanUrl = m3u8Url != null ? m3u8Url.trim() : "";
+                if (cleanUrl.isEmpty()) {
+                    Log.e(TAG, "Cannot start M3U8 restream: M3U8 URL is empty or null");
+                    return;
+                }
 
-            String inputOpt = "-y -i \"" + m3u8Url + "\"";
-            if (bgBase64 != null && !bgBase64.isEmpty()) {
-                inputOpt = "-y -i \"" + m3u8Url + "\" -i data:image/png;base64," + bgBase64;
+                String outArgs = buildOutputArgs(rtmpUrlsJson);
+                if (outArgs == null || outArgs.isEmpty()) {
+                    Log.e(TAG, "Cannot start M3U8 restream: Output RTMP arguments are empty");
+                    return;
+                }
+
+                int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
+                int targetFps = fps > 0 ? fps : 30;
+                int gop = targetFps * 2;
+
+                String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
+                        + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                        + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
+                        + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+
+                Log.i(TAG, "Executing M3U8 restream: " + cmd);
+                FFmpegKit.executeAsync(cmd, session -> {
+                    Log.i(TAG, "M3U8 Restream session completed with state: " + session.getState() + ", code: " + session.getReturnCode());
+                }, log -> {
+                    Log.d(TAG, "FFmpeg: " + log.getMessage());
+                }, statistics -> {});
+            } catch (Exception e) {
+                Log.e(TAG, "Fatal error in startM3u8Restream", e);
+                e.printStackTrace();
             }
-
-            String cmd = inputOpt + " -c:v libx264 -preset ultrafast -tune zerolatency -b:v " + bitrate + " -r " + fps + " -s " + width + "x" + height + " -c:a aac -f flv \"" + rtmpUrl + "\"";
-            FFmpegKit.executeAsync(cmd, session -> {
-                Log.i(TAG, "M3U8 Restream session completed with state: " + session.getState());
-            }, log -> {
-                Log.d(TAG, "FFmpeg log: " + log.getMessage());
-            }, statistics -> {});
-        } catch (Exception e) {
-            Log.e(TAG, "Error starting M3u8 restream", e);
-        }
+        }).start();
     }
 
     @JavascriptInterface
     public void startLivePipe(String rtmpUrlsJson, int width, int height, int fps, int bitrate) {
-        Log.i(TAG, "startLivePipe requested");
-        try {
-            JSONArray urls = new JSONArray(rtmpUrlsJson);
-            if (urls.length() == 0) return;
-            String rtmpUrl = urls.getString(0);
+        new Thread(() -> {
+            try {
+                stopStream();
+                String outArgs = buildOutputArgs(rtmpUrlsJson);
+                if (outArgs == null || outArgs.isEmpty()) {
+                    Log.e(TAG, "Cannot start live pipe: Output RTMP arguments are empty");
+                    return;
+                }
 
-            activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(context);
-            if (activePipePath != null) {
+                activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(context);
+                if (activePipePath == null) {
+                    Log.e(TAG, "Failed to register FFmpeg pipe");
+                    return;
+                }
+
+                int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
+                int targetFps = fps > 0 ? fps : 30;
+                int gop = targetFps * 2;
+
+                String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
+                        + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                        + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
+                        + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+
+                FFmpegKit.executeAsync(cmd, session -> {});
                 pipeOutputStream = new FileOutputStream(activePipePath);
+            } catch (Exception e) {
+                Log.e(TAG, "Error starting live pipe", e);
             }
-
-            String cmd = "-y -f webm -i \"" + activePipePath + "\" -c:v libx264 -preset ultrafast -tune zerolatency -b:v " + bitrate + " -r " + fps + " -s " + width + "x" + height + " -c:a aac -f flv \"" + rtmpUrl + "\"";
-            FFmpegKit.executeAsync(cmd, session -> {
-                Log.i(TAG, "Live pipe session completed");
-            }, log -> {
-                Log.d(TAG, "FFmpeg pipe log: " + log.getMessage());
-            }, statistics -> {});
-        } catch (Exception e) {
-            Log.e(TAG, "Error starting live pipe", e);
-        }
+        }).start();
     }
 
     @JavascriptInterface
     public void pushVideoChunk(String base64Chunk) {
-        if (pipeOutputStream != null) {
+        if (pipeOutputStream != null && base64Chunk != null) {
             try {
                 byte[] data = Base64.decode(base64Chunk, Base64.DEFAULT);
                 pipeOutputStream.write(data);
@@ -119,7 +175,7 @@ public class NativeRtmpBridge {
                 pipeOutputStream = null;
             }
             if (activePipePath != null) {
-                FFmpegKitConfig.closeFFmpegPipe(activePipePath);
+                try { FFmpegKitConfig.closeFFmpegPipe(activePipePath); } catch (Exception ignored) {}
                 activePipePath = null;
             }
         } catch (Exception e) {
