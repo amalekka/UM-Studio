@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -173,14 +175,62 @@ fun AdvancedSettingsScreen(viewModel: MainViewModel) {
             }
             
             Spacer(modifier = Modifier.height(24.dp))
-            
+
+            // Telegram Channel Button
+            Surface(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/u_80ee"))
+                    context.startActivity(intent)
+                },
+                color = Color(0x33229ED9),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Color(0xFF229ED9).copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        Icons.Default.Send,
+                        null,
+                        tint = Color(0xFF229ED9),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "TELEGRAM CHANNEL",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            "https://t.me/u_80ee",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Footer
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    "VERSION 2.4.5 PRO BUILD", 
+                    "بواسطة UM Tag",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "VERSION 1.0", 
                     modifier = Modifier.clickable { viewModel.onVersionClick() },
                     fontSize = 11.sp,
-                    color = Color.White.copy(alpha = 0.3f),
+                    color = Color.White.copy(alpha = 0.4f),
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )
