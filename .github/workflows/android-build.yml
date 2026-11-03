@@ -34,9 +34,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Setup Gradle 9.3.1 (Required by AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -133,7 +130,7 @@ jobs:
             fi
           done
 
-          # 7. Actually Generate NativeRtmpBridge.java next to MainActivity
+          # 7. Generate NativeRtmpBridge.java next to MainActivity
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
@@ -283,7 +280,6 @@ jobs:
           if [ -d "android/app" ] && [ ! -d "app" ]; then
             cd android
           fi
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
           chmod +x gradlew 2>/dev/null || true
           if [ -f "./gradlew" ]; then
             ./gradlew assembleRelease --stacktrace
