@@ -581,55 +581,69 @@ class MainViewModel : ViewModel() {
                                 _uiState.value = _uiState.value.copy(
                                     isStreaming = false,
                                     streamingStatus = StreamingStatus.IDLE,
-                                    diagnosticMessage = "Engine Not Ready",
+                                    diagnosticMessage = "Native Bridge Not Initialized",
                                     diagnosticIsError = true
                                 )
-                                Toast.makeText(context, "M3U8 Streaming engine not ready", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Native streaming bridge not initialized or running in browser mode", Toast.LENGTH_LONG).show()
                             }
                             return@launch
                         }
-                        if (state.m3u8Url.isBlank()) {
+                        val cleanUrl = state.m3u8Url.trim().removeSurrounding("\"").removeSurrounding("'")
+                        if (cleanUrl.isBlank() || !cleanUrl.startsWith("http")) {
                             withContext(Dispatchers.Main) {
                                 _uiState.value = _uiState.value.copy(
                                     isStreaming = false,
                                     streamingStatus = StreamingStatus.IDLE,
-                                    diagnosticMessage = "M3U8 URL Missing",
+                                    diagnosticMessage = "Invalid Remote M3U8 URL",
                                     diagnosticIsError = true
                                 )
-                                Toast.makeText(context, "Please enter an M3U8 source URL first in M3U8 Streams tab", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Please enter a valid remote M3U8 URL first in Streams tab", Toast.LENGTH_LONG).show()
                             }
                             return@launch
                         }
-                        val hasOverlay = state.bgConfig.imageUri != null && state.bgConfig.displayMode != ImageDisplayMode.OFF
-                        val m3u8Url = state.m3u8Url
-                        val m3u8Headers = state.m3u8Headers
-                        val preferStreamCopy = state.preferM3u8StreamCopy
 
-                        // 1. ALL ExoPlayer setup, playback and format reading MUST run on Dispatchers.Main
-                        val canStreamCopy = withContext(Dispatchers.Main) {
-                            restreamEngine.setupRestream(m3u8Url, m3u8Headers)
-                            restreamEngine.play()
-                            val isH264 = restreamEngine.isH264Source()
-                            (preferStreamCopy && isH264 && !hasOverlay)
-                        }
+                        try {
+                            val hasOverlay = state.bgConfig.imageUri != null && state.bgConfig.displayMode != ImageDisplayMode.OFF
+                            val m3u8Headers = state.m3u8Headers
+                            val preferStreamCopy = state.preferM3u8StreamCopy
 
-                        // 2. Keep ONLY FFmpegKit execution and RTMP sockets on Dispatchers.IO
-                        restreamEngine.startRestreaming(
-                            config = config,
-                            primaryUrl = primaryUrl,
-                            allUrls = allUrls,
-                            hasOverlay = hasOverlay,
-                            preferStreamCopy = preferStreamCopy,
-                            canStreamCopyOverride = canStreamCopy
-                        )
-                        withContext(Dispatchers.Main) {
-                            _uiState.value = _uiState.value.copy(
-                                isStreaming = true,
-                                streamingStatus = StreamingStatus.STREAMING
+                            // 1. ALL ExoPlayer setup, playback and format reading MUST run on Dispatchers.Main
+                            val canStreamCopy = withContext(Dispatchers.Main) {
+                                restreamEngine.setupRestream(cleanUrl, m3u8Headers)
+                                restreamEngine.play()
+                                val isH264 = restreamEngine.isH264Source()
+                                (preferStreamCopy && isH264 && !hasOverlay)
+                            }
+
+                            // 2. Keep ONLY FFmpegKit execution and RTMP sockets on Dispatchers.IO
+                            restreamEngine.startRestreaming(
+                                config = config,
+                                primaryUrl = primaryUrl,
+                                allUrls = allUrls,
+                                hasOverlay = hasOverlay,
+                                preferStreamCopy = preferStreamCopy,
+                                canStreamCopyOverride = canStreamCopy
                             )
-                            startTimer()
-                            val copyModeText = if (canStreamCopy) " (Ultra-Fast Copy)" else ""
-                            Toast.makeText(context, "Broadcasting M3U8 stream to ${primary.name}$copyModeText...", Toast.LENGTH_SHORT).show()
+                            withContext(Dispatchers.Main) {
+                                _uiState.value = _uiState.value.copy(
+                                    isStreaming = true,
+                                    streamingStatus = StreamingStatus.STREAMING
+                                )
+                                startTimer()
+                                val copyModeText = if (canStreamCopy) " (Ultra-Fast Copy)" else ""
+                                Toast.makeText(context, "Broadcasting M3U8 stream to ${primary.name}$copyModeText...", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MainViewModel", "Error in M3U8 restream execution: ${e.message}", e)
+                            withContext(Dispatchers.Main) {
+                                _uiState.value = _uiState.value.copy(
+                                    isStreaming = false,
+                                    streamingStatus = StreamingStatus.IDLE,
+                                    diagnosticMessage = "Stream Error: ${e.message}",
+                                    diagnosticIsError = true
+                                )
+                                Toast.makeText(context, "Failed to start M3U8 restream: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
                     StreamSource.CAMERA -> {
