@@ -410,8 +410,48 @@ class StreamEngineManager(
         }
     }
 
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording
+
+    fun startRecord(filePath: String): Boolean {
+        if (isReleased) return false
+        try {
+            if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
+                rtmpCamera2?.startRecord(filePath)
+            } else {
+                rtmpDisplay?.startRecord(filePath)
+            }
+            _isRecording.value = true
+            return true
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Failed to start local recording: ${e.message}")
+            _isRecording.value = false
+            return false
+        }
+    }
+
+    fun stopRecord() {
+        if (isReleased) return
+        try {
+            if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
+                rtmpCamera2?.stopRecord()
+            } else {
+                rtmpDisplay?.stopRecord()
+            }
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Error stopping local recording: ${e.message}")
+        } finally {
+            _isRecording.value = false
+        }
+    }
+
     fun stopStream() {
         if (isReleased) return
+        try {
+            if (_isRecording.value) {
+                stopRecord()
+            }
+        } catch (_: Exception) {}
         if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
             rtmpCamera2?.stopStream()
         } else {

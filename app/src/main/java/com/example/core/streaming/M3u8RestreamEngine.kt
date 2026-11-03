@@ -298,7 +298,7 @@ class M3u8RestreamEngine(
                 "-c:v copy"
             } else {
                 val gopMin = fps
-                "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -keyint_min $gopMin -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v ${bitrateKbps}k -minrate ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps}k"
+                "-rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -keyint_min $gopMin -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -minrate ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
             }
 
             val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+discardcorrupt+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
@@ -345,7 +345,7 @@ class M3u8RestreamEngine(
                             _diagnosticMessage.value = "Protocol Fallback • Connecting..."
                             _diagnosticIsError.value = false
                             val httpUrl = m3u8.replaceFirst("https://", "http://")
-                            val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+                            val vCodecArgs = "-rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
                             val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
                             val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
@@ -358,7 +358,7 @@ class M3u8RestreamEngine(
                             _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
                             _diagnosticIsError.value = false
                             val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
-                            val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$m3u8\" -rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
                             return@executeAsync
                         }

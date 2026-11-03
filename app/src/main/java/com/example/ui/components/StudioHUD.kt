@@ -53,6 +53,17 @@ fun SparklineWaveformGraph(
     data: List<Float>,
     color: Color = CyberCyan
 ) {
+    val infiniteTransition = rememberInfiniteTransition(label = "wavePulse")
+    val waveAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.5f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "waveAlpha"
+    )
+
     Canvas(modifier = modifier) {
         if (data.size < 2) return@Canvas
         val path = Path()
@@ -74,7 +85,7 @@ fun SparklineWaveformGraph(
         
         drawPath(
             path = path,
-            color = color,
+            color = color.copy(alpha = waveAlpha),
             style = Stroke(width = 2.dp.toPx())
         )
     }
@@ -83,10 +94,13 @@ fun SparklineWaveformGraph(
 @Composable
 fun DynamicIslandHUD(
     isLive: Boolean,
+    isPaused: Boolean = false,
+    isRecording: Boolean = false,
     streamTime: Long,
     bitrate: Int,
     fps: Int,
     endpoints: List<PlatformEndpoint>,
+    onToggleRecord: () -> Unit = {},
     onSettingsClick: () -> Unit,
     onDestinationsClick: () -> Unit,
     onTelemetryClick: () -> Unit
@@ -106,6 +120,20 @@ fun DynamicIslandHUD(
     LaunchedEffect(bitrate) {
         bitrateHistory.add(bitrate.toFloat())
         if (bitrateHistory.size > 30) bitrateHistory.removeAt(0)
+    }
+
+    val statusColor = when {
+        isPaused -> Color(0xFFF59E0B)
+        isLive && fps > 0 && bitrate > 0 -> CrimsonRed
+        isLive -> Color(0xFFF59E0B)
+        else -> Color.Gray
+    }
+
+    val statusText = when {
+        isPaused -> "PAUSED"
+        isLive && fps > 0 && bitrate > 0 -> "LIVE ${formatTime(streamTime)}"
+        isLive -> "CONNECTING..."
+        else -> "READY"
     }
 
     Row(
@@ -140,12 +168,12 @@ fun DynamicIslandHUD(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(if (isLive) CrimsonRed else Color.Gray)
-                                .then(if (isLive) Modifier.blur(2.dp * pulseAlpha) else Modifier)
+                                .background(statusColor)
+                                .then(if (isLive || isPaused) Modifier.blur(2.dp * pulseAlpha) else Modifier)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isLive) "LIVE ${formatTime(streamTime)}" else "READY",
+                            text = statusText,
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Black,
@@ -213,6 +241,11 @@ fun DynamicIslandHUD(
         // Right Action Buttons
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassCircularButton(
+                icon = Icons.Default.RadioButtonChecked,
+                tint = if (isRecording) CrimsonRed else Color.White,
+                onClick = onToggleRecord
+            )
+            GlassCircularButton(
                 icon = Icons.Default.SignalCellularAlt,
                 onClick = onTelemetryClick
             )
@@ -241,7 +274,6 @@ fun PlatformBadge(endpoint: PlatformEndpoint) {
             .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        // Just a colored dot for now to represent platform
         Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(Color.White))
     }
 }
@@ -267,6 +299,7 @@ fun StatPill(icon: ImageVector, text: String) {
 @Composable
 fun GlassCircularButton(
     icon: ImageVector,
+    tint: Color = Color.White,
     onClick: () -> Unit
 ) {
     Box(
@@ -281,7 +314,7 @@ fun GlassCircularButton(
         Icon(
             icon,
             null,
-            tint = Color.White,
+            tint = tint,
             modifier = Modifier.size(20.dp)
         )
     }
@@ -370,9 +403,11 @@ fun SourceSelectorPill(
 @Composable
 fun CurvedControlDock(
     isLive: Boolean,
+    isPaused: Boolean = false,
     isMicOn: Boolean,
     isChatActive: Boolean,
     onGoLive: () -> Unit,
+    onTogglePause: () -> Unit = {},
     onToggleMic: () -> Unit,
     onOpenMixer: () -> Unit,
     onOpenBackground: () -> Unit,
@@ -407,8 +442,8 @@ fun CurvedControlDock(
                     NeonActionIcon(Icons.Default.GraphicEq, null, onOpenMixer)
                 }
 
-                // Center Spacer for elevated button
-                Spacer(modifier = Modifier.width(80.dp))
+                // Center Spacer for elevated buttons
+                Spacer(modifier = Modifier.width(if (isLive) 130.dp else 80.dp))
 
                 // Right 2 Buttons
                 Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -422,7 +457,7 @@ fun CurvedControlDock(
             }
         }
 
-        // Center Hero Button (Elevated)
+        // Center Elevated Buttons
         val infiniteTransition = rememberInfiniteTransition(label = "liveGlow")
         val glowScale by infiniteTransition.animateFloat(
             initialValue = 1f,
@@ -434,44 +469,87 @@ fun CurvedControlDock(
             label = "glowScale"
         )
 
-        Box(
+        Row(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = (-4).dp) // Adjust to match "-mt-6" style elevation
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            if (isLive) CrimsonRed else Color(0xFF10B981),
-                            if (isLive) CrimsonRed.copy(alpha = 0.4f) else Color(0xFF10B981).copy(alpha = 0.4f)
+                .offset(y = (-28).dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isLive) {
+                // Glowing Pause / Resume Button
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    if (isPaused) Color(0xFFF59E0B) else CyberCyan,
+                                    if (isPaused) Color(0xFFF59E0B).copy(alpha = 0.4f) else CyberCyan.copy(alpha = 0.4f)
+                                )
+                            )
+                        )
+                        .border(1.5.dp, Color.White.copy(alpha = 0.6f), CircleShape)
+                        .shadow(8.dp, CircleShape, ambientColor = if (isPaused) Color(0xFFF59E0B) else CyberCyan)
+                        .clickable(onClick = onTogglePause),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            null,
+                            tint = Color.Black,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            if (isPaused) "RESUME" else "PAUSE",
+                            color = Color.Black,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                }
+            }
+
+            // Hero LIVE / STOP Button
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                if (isLive) CrimsonRed else Color(0xFF10B981),
+                                if (isLive) CrimsonRed.copy(alpha = 0.4f) else Color(0xFF10B981).copy(alpha = 0.4f)
+                            )
                         )
                     )
-                )
-                .then(
-                    if (isLive) Modifier.border(
-                        (3.dp * glowScale),
-                        CrimsonRed.copy(alpha = 0.6f),
-                        CircleShape
-                    ) else Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
-                )
-                .shadow(12.dp, CircleShape, ambientColor = if (isLive) CrimsonRed else Color(0xFF10B981))
-                .clickable(onClick = onGoLive),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    if (isLive) Icons.Default.Stop else Icons.Default.PlayArrow,
-                    null,
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp)
-                )
-                Text(
-                    if (isLive) "STOP" else "LIVE",
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Black
-                )
+                    .then(
+                        if (isLive) Modifier.border(
+                            (3.dp * glowScale),
+                            CrimsonRed.copy(alpha = 0.6f),
+                            CircleShape
+                        ) else Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                    )
+                    .shadow(12.dp, CircleShape, ambientColor = if (isLive) CrimsonRed else Color(0xFF10B981))
+                    .clickable(onClick = onGoLive),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        if (isLive) Icons.Default.Stop else Icons.Default.PlayArrow,
+                        null,
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Text(
+                        if (isLive) "STOP" else "LIVE",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
             }
         }
     }
@@ -506,34 +584,97 @@ fun AudioMixerSheet(
     onMicVolumeChange: (Float) -> Unit,
     m3u8Volume: Float,
     onM3u8VolumeChange: (Float) -> Unit,
+    onPlaySfx: (com.example.core.audio.AudioSfxManager.SfxType) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var isNoiseSuppressionOn by remember { mutableStateOf(true) }
+    var isAudioDuckingOn by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(24.dp)
             .padding(bottom = 32.dp)
+            .verticalScroll(rememberScrollState())
     ) {
         Text(
-            "AUDIO MIXER",
+            "AUDIO MIXER & SOUND EFFECTS PAD",
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Black,
-            modifier = Modifier.padding(bottom = 24.dp)
+            modifier = Modifier.padding(bottom = 20.dp)
         )
         
-        MixerSlider("MICROPHONE", micVolume, onMicVolumeChange)
-        Spacer(modifier = Modifier.height(24.dp))
-        MixerSlider("MEDIA / M3U8", m3u8Volume, onM3u8VolumeChange)
+        MixerSlider("MICROPHONE INPUT", micVolume, onMicVolumeChange)
+        Spacer(modifier = Modifier.height(20.dp))
+        MixerSlider("MEDIA / REMOTE AUDIO", m3u8Volume, onM3u8VolumeChange)
         
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            "LIVE SOUND EFFECTS PAD (SFX)",
+            color = CyberCyan.copy(alpha = 0.6f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SfxButton("📯 AIRHORN") { onPlaySfx(com.example.core.audio.AudioSfxManager.SfxType.AIRHORN) }
+            SfxButton("👏 APPLAUSE") { onPlaySfx(com.example.core.audio.AudioSfxManager.SfxType.APPLAUSE) }
+            SfxButton("⚽ GOAL") { onPlaySfx(com.example.core.audio.AudioSfxManager.SfxType.GOAL) }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SfxButton("😂 LAUGH") { onPlaySfx(com.example.core.audio.AudioSfxManager.SfxType.LAUGH) }
+            SfxButton("🎉 CHEER") { onPlaySfx(com.example.core.audio.AudioSfxManager.SfxType.CHEER) }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            "PRO AUDIO PROCESSING",
+            color = Color.White.copy(alpha = 0.5f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        FeatureToggleRow("AI NOISE SUPPRESSION", isNoiseSuppressionOn) { isNoiseSuppressionOn = it }
+        Spacer(modifier = Modifier.height(8.dp))
+        FeatureToggleRow("AUDIO DUCKING (AUTO-LOWER MEDIA ON TALK)", isAudioDuckingOn) { isAudioDuckingOn = it }
+
+        Spacer(modifier = Modifier.height(28.dp))
         Button(
             onClick = onDismiss,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text("CLOSE MIXER", color = Color.Black, fontWeight = FontWeight.Bold)
+            Text("CLOSE MIXER", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+    }
+}
+
+@Composable
+fun SfxButton(text: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.height(44.dp),
+        color = Color.White.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, CyberCyan.copy(alpha = 0.3f))
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 12.dp)) {
+            Text(text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
         }
     }
 }
@@ -597,6 +738,8 @@ fun DraggableFacecam(
 @Composable
 fun GlassChatOverlay(
     messages: List<com.example.ui.MainViewModel.ChatMessage>,
+    onPinComment: (com.example.ui.MainViewModel.ChatMessage) -> Unit,
+    onOpenChatHub: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -609,67 +752,215 @@ fun GlassChatOverlay(
 
     Box(
         modifier = modifier
-            .fillMaxWidth(0.65f)
+            .fillMaxWidth(0.75f)
             .heightIn(max = 220.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(GlassDark)
             .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(20.dp))
-            .padding(12.dp)
+            .padding(10.dp)
     ) {
-        androidx.compose.foundation.lazy.LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(messages) { msg ->
-                ChatItem(msg)
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(CyberCyan))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("LIVE CHAT", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+                IconButton(onClick = onOpenChatHub, modifier = Modifier.size(20.dp)) {
+                    Icon(Icons.Default.Settings, "Chat Hub", tint = CyberCyan, modifier = Modifier.size(12.dp))
+                }
+            }
+
+            androidx.compose.foundation.lazy.LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(messages) { msg ->
+                    ChatItem(msg, onPin = { onPinComment(msg) })
+                }
             }
         }
     }
 }
 
 @Composable
-fun ChatItem(message: com.example.ui.MainViewModel.ChatMessage) {
+fun ChatItem(
+    message: com.example.ui.MainViewModel.ChatMessage,
+    onPin: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // User Avatar Placeholder
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.1f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Default.Person, null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
-        }
-        
-        Spacer(modifier = Modifier.width(8.dp))
-        
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Top) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when (message.platform.lowercase()) {
+                            "twitch" -> Color(0xFF9146FF)
+                            "youtube" -> Color(0xFFFF0000)
+                            else -> Color(0xFF00F2FF)
+                        }.copy(alpha = 0.2f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(message.platform.take(1).uppercase(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            }
+            
+            Spacer(modifier = Modifier.width(8.dp))
+            
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = message.author,
+                        color = CyberCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        null,
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(10.dp)
+                    )
+                }
                 Text(
-                    text = message.author,
-                    color = CyberCyan,
+                    text = message.message,
+                    color = Color.White.copy(alpha = 0.9f),
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.Black
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                // Verified Badge
-                Icon(
-                    Icons.Default.CheckCircle,
-                    null,
-                    tint = Color(0xFF38BDF8),
-                    modifier = Modifier.size(10.dp)
+                    lineHeight = 15.sp
                 )
             }
-            Text(
-                text = message.message,
-                color = Color.White.copy(alpha = 0.9f),
-                fontSize = 12.sp,
-                lineHeight = 16.sp
-            )
+        }
+
+        IconButton(onClick = onPin, modifier = Modifier.size(24.dp)) {
+            Icon(Icons.Default.PushPin, "Pin to broadcast", tint = Color.White.copy(alpha = 0.4f), modifier = Modifier.size(12.dp))
+        }
+    }
+}
+
+@Composable
+fun LiveChatHubSheet(
+    twitchChannel: String,
+    onConnectTwitch: (String) -> Unit,
+    youtubeChannel: String,
+    onConnectYouTube: (String) -> Unit,
+    pinnedComment: com.example.ui.MainViewModel.ChatMessage?,
+    onUnpinComment: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var twitchInput by remember { mutableStateOf(twitchChannel) }
+    var youtubeInput by remember { mutableStateOf(youtubeChannel) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .padding(bottom = 32.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(
+            "REAL-TIME LIVE CHAT HUB",
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            "CONNECT TWITCH IRC WEBSOCKET & YOUTUBE LIVE CHAT",
+            color = CyberCyan.copy(alpha = 0.6f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 24.dp)
+        )
+
+        // Pinned Comment Status
+        if (pinnedComment != null) {
+            Surface(
+                color = Color(0x3300F2FF),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, CyberCyan),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("PINNED COMMENT ON STREAM", color = CyberCyan, fontSize = 9.sp, fontWeight = FontWeight.Black)
+                        Text("${pinnedComment.author}: ${pinnedComment.message}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onUnpinComment) {
+                        Text("UNPIN", color = CrimsonRed, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        }
+
+        // Twitch IRC Input
+        GlassSectionCard(title = "TWITCH IRC WEBSOCKET (ZERO KEY)") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                GlassTextField(
+                    value = twitchInput,
+                    onValueChange = { twitchInput = it },
+                    label = "TWITCH CHANNEL NAME (e.g. shroud, ninja)",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { onConnectTwitch(twitchInput) },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9146FF)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Link, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("CONNECT TWITCH CHAT", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // YouTube Live Chat Input
+        GlassSectionCard(title = "YOUTUBE / KICK LIVE CHAT CONNECTOR") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                GlassTextField(
+                    value = youtubeInput,
+                    onValueChange = { youtubeInput = it },
+                    label = "YOUTUBE VIDEO ID OR CHANNEL NAME",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { onConnectYouTube(youtubeInput) },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF0000)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.PlayCircle, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("CONNECT YOUTUBE CHAT", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+        Button(
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text("DONE", color = Color.Black, fontWeight = FontWeight.Black)
         }
     }
 }
@@ -762,7 +1053,8 @@ fun M3u8GlassSheet(
                 modifier = Modifier.weight(1f).height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = GlassDark),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(vertical = 12.dp)
             ) {
                 Icon(Icons.Default.Save, null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
@@ -774,7 +1066,8 @@ fun M3u8GlassSheet(
                 modifier = Modifier.weight(1.2f).height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
                 shape = RoundedCornerShape(12.dp),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp),
+                contentPadding = PaddingValues(vertical = 12.dp)
             ) {
                 Icon(Icons.Default.Speed, null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))

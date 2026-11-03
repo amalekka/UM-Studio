@@ -17,6 +17,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -62,6 +64,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.ui.PlayerView
 import com.example.MainActivity
 import com.example.core.streaming.StreamSource
+import com.example.core.model.AspectRatioMode
 import com.example.ui.MainViewModel
 import com.example.ui.components.*
 import com.example.ui.theme.Obsidian
@@ -106,7 +109,7 @@ fun MainScreen(viewModel: MainViewModel) {
     Scaffold(
         containerColor = Color.Transparent
     ) { padding ->
-        Box(modifier = Modifier.padding(padding)) {
+        Box(modifier = Modifier.fillMaxSize()) {
             StudioPreviewScreen(viewModel = viewModel)
         }
     }
@@ -125,6 +128,7 @@ fun StudioPreviewScreen(
     var showAudioMixer by remember { mutableStateOf(false) }
     var showDestinationsSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showChatHubSheet by remember { mutableStateOf(false) }
     var editingEndpoint by remember { mutableStateOf<com.example.core.model.PlatformEndpoint?>(null) }
     var isChatVisible by remember { mutableStateOf(true) }
     val bgSheetState = rememberModalBottomSheetState()
@@ -208,39 +212,62 @@ fun StudioPreviewScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Obsidian)
-            .statusBarsPadding()
     ) {
         val screenWidth = maxWidth
         val screenHeight = maxHeight
         
-        val targetRatio = 9f / 16f
+        val targetRatio = uiState.streamConfig.aspectRatio.getRatio()
         val viewportWidth: Dp
         val viewportHeight: Dp
         
-        if (screenWidth / screenHeight > targetRatio) {
-            viewportHeight = screenHeight
-            viewportWidth = screenHeight * targetRatio
-        } else {
+        // Calculate viewport based on aspect ratio and scale mode
+        if (uiState.canvasScaleMode == MainViewModel.CanvasScaleMode.STRETCH) {
             viewportWidth = screenWidth
-            viewportHeight = screenWidth * (1f / targetRatio)
+            viewportHeight = screenHeight
+        } else {
+            if (screenWidth / screenHeight > targetRatio) {
+                // Screen is wider than target ratio
+                if (uiState.canvasScaleMode == MainViewModel.CanvasScaleMode.FIT) {
+                    viewportHeight = screenHeight
+                    viewportWidth = screenHeight * targetRatio
+                } else {
+                    viewportWidth = screenWidth
+                    viewportHeight = screenWidth * (1f / targetRatio)
+                }
+            } else {
+                // Screen is taller than target ratio
+                if (uiState.canvasScaleMode == MainViewModel.CanvasScaleMode.FIT) {
+                    viewportWidth = screenWidth
+                    viewportHeight = screenWidth * (1f / targetRatio)
+                } else {
+                    viewportHeight = screenHeight
+                    viewportWidth = screenHeight * targetRatio
+                }
+            }
         }
 
         val borderColor = if (uiState.isStreaming) CrimsonRed else CyberCyan
         
-        // 1. Full-Bleed Edge-to-Edge Video Viewport
+        // 1. Full-Bleed Video Viewport with Gestures
         Box(
             modifier = Modifier
                 .size(viewportWidth, viewportHeight)
                 .align(Alignment.Center)
                 .clip(RoundedCornerShape(28.dp))
-                .background(Obsidian)
-                .border(
-                    width = 2.dp,
-                    brush = Brush.linearGradient(
-                        colors = listOf(borderColor, borderColor.copy(alpha = 0.3f), borderColor)
-                    ),
-                    shape = RoundedCornerShape(28.dp)
+                .graphicsLayer(
+                    scaleX = uiState.canvasZoom,
+                    scaleY = uiState.canvasZoom,
+                    translationX = uiState.canvasOffsetX,
+                    translationY = uiState.canvasOffsetY
                 )
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val newZoom = (uiState.canvasZoom * zoom).coerceIn(0.5f, 5.0f)
+                        val newX = uiState.canvasOffsetX + pan.x
+                        val newY = uiState.canvasOffsetY + pan.y
+                        viewModel.updateCanvasTransform(newZoom, newX, newY)
+                    }
+                }
         ) {
             // Base Layer: Video Feed
             Box(modifier = Modifier.fillMaxSize()) {
@@ -281,53 +308,113 @@ fun StudioPreviewScreen(
                 }
             }
 
-            // Neon Pulse Overlay
+            // Neon Border - Hugging the calculated viewport
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .border(
+                        width = 2.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(borderColor, borderColor.copy(alpha = 0.3f), borderColor)
+                        ),
+                        shape = RoundedCornerShape(28.dp)
+                    )
                     .border(
                         BorderStroke(
                             (3.dp * glowAlpha),
                             Brush.sweepGradient(listOf(Color.Transparent, borderColor, Color.Transparent))
                         ),
-                        RoundedCornerShape(28.dp)
+                        shape = RoundedCornerShape(28.dp)
                     )
             )
+        }
 
-            // 2. Floating Controls Overlays
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Top: Dynamic Island HUD
+        // 2. Immersive Overlays with Safe Areas
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Top: Dynamic Island HUD with Status Bar Padding
+            Box(modifier = Modifier.statusBarsPadding()) {
                 DynamicIslandHUD(
                     isLive = uiState.isStreaming,
+                    isPaused = uiState.isPaused,
+                    isRecording = uiState.isRecording,
                     streamTime = uiState.streamTime,
                     bitrate = uiState.currentBitrate,
                     fps = uiState.fps,
                     endpoints = uiState.endpoints,
+                    onToggleRecord = { viewModel.toggleRecording(context) },
                     onSettingsClick = { showSettingsSheet = true },
                     onDestinationsClick = { showDestinationsSheet = true },
                     onTelemetryClick = {
                         Toast.makeText(context, uiState.diagnosticMessage, Toast.LENGTH_SHORT).show()
                     }
                 )
+            }
 
-                // Middle: Chat (Redesigned Overlay)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.BottomStart
-                ) {
-                    if (isChatVisible) {
-                        GlassChatOverlay(messages = uiState.chatMessages)
-                    }
+            // Middle: Floating Quick Controls
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Aspect Ratio Quick Toggle
+                    QuickGlassAction(
+                        icon = Icons.Default.AspectRatio,
+                        label = "RATIO",
+                        onClick = {
+                            val ratios = listOf<AspectRatioMode>(
+                                AspectRatioMode.PORTRAIT_9_16,
+                                AspectRatioMode.LANDSCAPE_16_9,
+                                AspectRatioMode.SQUARE_1_1,
+                                AspectRatioMode.Custom(4, 5)
+                            )
+                            val currentIndex = ratios.indexOf(uiState.streamConfig.aspectRatio)
+                            val nextIndex = (currentIndex + 1) % ratios.size
+                            viewModel.updateConfig(uiState.streamConfig.copy(aspectRatio = ratios[nextIndex]))
+                        }
+                    )
+                    
+                    // Scale Mode Quick Toggle
+                    QuickGlassAction(
+                        icon = Icons.Default.FitScreen,
+                        label = uiState.canvasScaleMode.name,
+                        onClick = {
+                            val modes = MainViewModel.CanvasScaleMode.entries
+                            val currentIndex = modes.indexOf(uiState.canvasScaleMode)
+                            val nextIndex = (currentIndex + 1) % modes.size
+                            viewModel.setCanvasScaleMode(modes[nextIndex])
+                        }
+                    )
+
+                    // Reset Preview Transform
+                    QuickGlassAction(
+                        icon = Icons.Default.Refresh,
+                        label = "RESET",
+                        onClick = { viewModel.updateCanvasTransform(1f, 0f, 0f) }
+                    )
+                }
+            }
+
+            // Bottom: Controls with Navigation Bar Padding
+            Column(
+                modifier = Modifier
+                    .navigationBarsPadding()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (isChatVisible) {
+                    GlassChatOverlay(
+                        messages = uiState.chatMessages,
+                        onPinComment = { viewModel.pinComment(it) },
+                        onOpenChatHub = { showChatHubSheet = true }
+                    )
                 }
 
-                // Bottom: Action Dock
                 SourceSelectorPill(
                     currentSource = uiState.currentSource,
                     onSelect = { source ->
@@ -340,11 +427,10 @@ fun StudioPreviewScreen(
                         }
                     }
                 )
-                
-                Spacer(modifier = Modifier.height(8.dp))
 
                 CurvedControlDock(
                     isLive = uiState.isStreaming,
+                    isPaused = uiState.isPaused,
                     isMicOn = uiState.isMicEnabled,
                     isChatActive = isChatVisible,
                     onGoLive = {
@@ -363,23 +449,57 @@ fun StudioPreviewScreen(
                             }
                         }
                     },
+                    onTogglePause = { viewModel.togglePauseStream() },
                     onToggleMic = { viewModel.toggleMic(!uiState.isMicEnabled) },
                     onOpenMixer = { showAudioMixer = true },
                     onOpenBackground = { showBackgroundSheet = true },
                     onToggleChat = { isChatVisible = !isChatVisible }
                 )
             }
+        }
 
-            // Draggable Facecam PiP Overlay
-            if (uiState.isFacecamEnabled && uiState.currentSource != StreamSource.CAMERA) {
-                DraggableFacecam(
-                    initialX = uiState.facecamX,
-                    initialY = uiState.facecamY,
-                    onPositionChange = { x, y -> viewModel.updateFacecamPosition(x, y) }
+        // Draggable Overlays (Text & Emojis)
+        uiState.bgConfig.textOverlays.forEach { overlay ->
+            DraggableOverlay(
+                x = overlay.x,
+                y = overlay.y,
+                onPositionChange = { nx, ny -> viewModel.updateTextOverlay(overlay.copy(x = nx, y = ny)) }
+            ) {
+                Surface(
+                    color = Color(overlay.backgroundColor),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(overlay.glowColor).copy(alpha = 0.5f))
                 ) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Face, null, tint = CyberCyan, modifier = Modifier.size(40.dp))
-                    }
+                    Text(
+                        text = overlay.text,
+                        color = Color(overlay.textColor),
+                        fontSize = (overlay.fontSize / 3).sp, // Scaled for preview
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        uiState.bgConfig.emojiOverlays.forEach { overlay ->
+            DraggableOverlay(
+                x = overlay.x,
+                y = overlay.y,
+                onPositionChange = { nx, ny -> viewModel.updateEmojiOverlay(overlay.copy(x = nx, y = ny)) }
+            ) {
+                Text(overlay.emoji, fontSize = 40.sp)
+            }
+        }
+
+        // Draggable Facecam
+        if (uiState.isFacecamEnabled && uiState.currentSource != StreamSource.CAMERA) {
+            DraggableFacecam(
+                initialX = uiState.facecamX,
+                initialY = uiState.facecamY,
+                onPositionChange = { x, y -> viewModel.updateFacecamPosition(x, y) }
+            ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Face, null, tint = CyberCyan, modifier = Modifier.size(40.dp))
                 }
             }
         }
@@ -390,7 +510,10 @@ fun StudioPreviewScreen(
         ModalBottomSheet(
             onDismissRequest = { showBackgroundSheet = false },
             sheetState = bgSheetState,
-            containerColor = Obsidian
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             BackgroundStudioSheet(viewModel = viewModel, onDismiss = { showBackgroundSheet = false })
         }
@@ -399,14 +522,38 @@ fun StudioPreviewScreen(
     if (showAudioMixer) {
         ModalBottomSheet(
             onDismissRequest = { showAudioMixer = false },
-            containerColor = Obsidian
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             AudioMixerSheet(
                 micVolume = uiState.micVolume,
                 onMicVolumeChange = { viewModel.setMicVolume(it) },
                 m3u8Volume = uiState.m3u8Volume,
                 onM3u8VolumeChange = { viewModel.setM3u8Volume(it) },
+                onPlaySfx = { viewModel.playSfx(it) },
                 onDismiss = { showAudioMixer = false }
+            )
+        }
+    }
+
+    if (showChatHubSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showChatHubSheet = false },
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
+        ) {
+            LiveChatHubSheet(
+                twitchChannel = uiState.twitchChannel,
+                onConnectTwitch = { viewModel.connectTwitchChat(it) },
+                youtubeChannel = uiState.youtubeChannel,
+                onConnectYouTube = { viewModel.connectYouTubeChat(it) },
+                pinnedComment = uiState.pinnedComment,
+                onUnpinComment = { viewModel.unpinComment() },
+                onDismiss = { showChatHubSheet = false }
             )
         }
     }
@@ -414,7 +561,10 @@ fun StudioPreviewScreen(
     if (showM3u8Dialog) {
         ModalBottomSheet(
             onDismissRequest = { showM3u8Dialog = false },
-            containerColor = Obsidian
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             M3u8GlassSheet(
                 url = uiState.m3u8Url,
@@ -433,7 +583,10 @@ fun StudioPreviewScreen(
     if (showDestinationsSheet) {
         ModalBottomSheet(
             onDismissRequest = { showDestinationsSheet = false },
-            containerColor = Obsidian
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             DestinationsGlassSheet(
                 endpoints = uiState.endpoints,
@@ -451,7 +604,10 @@ fun StudioPreviewScreen(
     if (editingEndpoint != null) {
         ModalBottomSheet(
             onDismissRequest = { editingEndpoint = null },
-            containerColor = Obsidian
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             DestinationEditGlassSheet(
                 endpoint = editingEndpoint!!,
@@ -471,7 +627,10 @@ fun StudioPreviewScreen(
     if (showSettingsSheet) {
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
-            containerColor = Obsidian
+            containerColor = Obsidian.copy(alpha = 0.85f),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            tonalElevation = 0.dp,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             SettingsGlassSheet(
                 config = uiState.streamConfig,
@@ -839,7 +998,7 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
     val uiState by viewModel.uiState.collectAsState()
     val config = uiState.bgConfig
     val context = LocalContext.current
-    var urlInput by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableIntStateOf(0) }
     
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -851,315 +1010,291 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp)
+            .padding(horizontal = 16.dp)
             .padding(bottom = 32.dp)
-            .verticalScroll(rememberScrollState())
+            .heightIn(max = 700.dp)
     ) {
-        Text("BACKGROUND STUDIO", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color.White)
-        Text("PERSISTENT STREAM CANVAS & PiP COMPOSITOR", fontSize = 10.sp, color = Color(0xFF38BDF8))
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Image Dropzone / Picker
-        Surface(
-            onClick = {
-                photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            },
-            color = Color(0xFF0D111C),
-            shape = RoundedCornerShape(16.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2A324B).copy(alpha = 0.5f)),
-            modifier = Modifier.fillMaxWidth().height(110.dp)
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(Icons.Default.AddPhotoAlternate, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(32.dp))
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    if (config.imageUri != null) "IMAGE LOADED (TAP TO REPLACE)" else "CHOOSE GALLERY IMAGE (PNG / JPG / WEBP)",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Direct URL Input
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            GlassTextField(
-                value = urlInput,
-                onValueChange = { urlInput = it },
-                label = "DIRECT IMAGE URL",
-                modifier = Modifier.weight(1f)
-            )
-            Button(
-                onClick = {
-                    if (urlInput.isNotBlank()) {
-                        viewModel.setBackgroundImageFromUrl(context, urlInput.trim())
-                    }
-                },
-                modifier = Modifier.height(44.dp).padding(top = 16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("LOAD", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Column {
+                Text("STUDIO COMPOSITOR", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color.White)
+                Text("LAYERED BROADCAST PIPELINES", fontSize = 10.sp, color = CyberCyan)
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, null, tint = Color.Gray)
             }
         }
 
-        if (config.imageUri != null) {
-            Spacer(modifier = Modifier.height(10.dp))
-            Text("STUDIO DISPLAY MODE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(6.dp))
-            PillSelector(
-                options = listOf("Full Image", "PiP Overlay", "Hidden"),
-                selectedIndex = when (config.displayMode) {
-                    MainViewModel.ImageDisplayMode.FULL_IMAGE -> 0
-                    MainViewModel.ImageDisplayMode.PIP_OVERLAY -> 1
-                    MainViewModel.ImageDisplayMode.OFF -> 2
-                },
-                onSelect = { idx ->
-                    val mode = when (idx) {
-                        0 -> MainViewModel.ImageDisplayMode.FULL_IMAGE
-                        1 -> MainViewModel.ImageDisplayMode.PIP_OVERLAY
-                        else -> MainViewModel.ImageDisplayMode.OFF
-                    }
-                    viewModel.setImageDisplayMode(mode)
-                }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("PERSISTENT ON STORAGE", color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                TextButton(
-                    onClick = { viewModel.removeBackground(context) },
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text("REMOVE / RESET BACKGROUND", color = Color(0xFFEF4444), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
+        // Tab Selector
+        PillSelector(
+            options = listOf("BACKGROUND", "OVERLAYS"),
+            selectedIndex = selectedTab,
+            onSelect = { selectedTab = it }
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Interactive Preview Card with Touch Gesture (Drag & Pinch to Zoom)
-        if (config.imageUri != null) {
-            GlassSectionCard(title = "INTERACTIVE CANVAS PREVIEW (DRAG & PINCH)") {
-                val file = File(config.imageUri)
-                val bitmap = remember(config.imageUri) {
-                    if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
-                }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (selectedTab == 0) {
+                // BACKGROUND TAB
                 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Black)
-                        .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f), RoundedCornerShape(12.dp))
-                        .pointerInput(Unit) {
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                val newZoom = (config.zoom * zoom).coerceIn(0.5f, 2.0f)
-                                val newX = (config.offsetX + pan.x * 0.1f).coerceIn(-50f, 50f)
-                                val newY = (config.offsetY + pan.y * 0.1f).coerceIn(-50f, 50f)
-                                viewModel.updateBackgroundConfig(
-                                    config.copy(zoom = newZoom, offsetX = newX, offsetY = newY)
+                // Image Source
+                GlassSectionCard(title = "IMAGE SOURCE") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Surface(
+                            onClick = {
+                                photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            color = Color(0xFF0D111C),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, Color(0xFF2A324B).copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth().height(100.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                Icon(Icons.Default.AddPhotoAlternate, null, tint = CyberCyan, modifier = Modifier.size(32.dp))
+                                Text(
+                                    if (config.imageUri != null) "TAP TO REPLACE IMAGE" else "CHOOSE GALLERY IMAGE",
+                                    color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold
                                 )
                             }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Preview",
-                            contentScale = when (config.scaleMode) {
-                                MainViewModel.BackgroundScaleMode.COVER -> ContentScale.Crop
-                                MainViewModel.BackgroundScaleMode.CONTAIN -> ContentScale.Fit
-                                MainViewModel.BackgroundScaleMode.STRETCH -> ContentScale.FillBounds
-                                MainViewModel.BackgroundScaleMode.TOP_BANNER -> ContentScale.FillWidth
-                                MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> ContentScale.FillWidth
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                    Text(
-                        "Touch to Pan / Pinch to Zoom",
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 10.sp,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 6.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // Layer Modes & Controls
-        GlassSectionCard(title = "CANVAS CONTROLS") {
-            Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                // Scale Mode
-                Column {
-                    Text("PRESET LAYOUT MODE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    PillSelector(
-                        options = listOf("Cover", "Contain", "Top Banner", "Bottom", "Stretch"),
-                        selectedIndex = when (config.scaleMode) {
-                            MainViewModel.BackgroundScaleMode.COVER -> 0
-                            MainViewModel.BackgroundScaleMode.CONTAIN -> 1
-                            MainViewModel.BackgroundScaleMode.TOP_BANNER -> 2
-                            MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> 3
-                            MainViewModel.BackgroundScaleMode.STRETCH -> 4
-                        },
-                        onSelect = { index ->
-                            val mode = when (index) {
-                                0 -> MainViewModel.BackgroundScaleMode.COVER
-                                1 -> MainViewModel.BackgroundScaleMode.CONTAIN
-                                2 -> MainViewModel.BackgroundScaleMode.TOP_BANNER
-                                3 -> MainViewModel.BackgroundScaleMode.BOTTOM_BANNER
-                                else -> MainViewModel.BackgroundScaleMode.STRETCH
+                        }
+                        
+                        if (config.imageUri != null) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("DISPLAY MODE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                TextButton(onClick = { viewModel.removeBackground(context) }) {
+                                    Text("REMOVE", color = CrimsonRed, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                }
                             }
-                            viewModel.updateBackgroundConfig(config.copy(scaleMode = mode))
+                            PillSelector(
+                                options = listOf("Full", "PiP", "Off"),
+                                selectedIndex = when (config.displayMode) {
+                                    MainViewModel.ImageDisplayMode.FULL_IMAGE -> 0
+                                    MainViewModel.ImageDisplayMode.PIP_OVERLAY -> 1
+                                    else -> 2
+                                },
+                                onSelect = { idx ->
+                                    val mode = when (idx) {
+                                        0 -> MainViewModel.ImageDisplayMode.FULL_IMAGE
+                                        1 -> MainViewModel.ImageDisplayMode.PIP_OVERLAY
+                                        else -> MainViewModel.ImageDisplayMode.OFF
+                                    }
+                                    viewModel.setImageDisplayMode(mode)
+                                }
+                            )
                         }
-                    )
-                }
-
-                // Zoom Slider
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("ZOOM / SCALE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${(config.zoom * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
-                    GlowingSlider(
-                        value = config.zoom,
-                        onValueChange = { viewModel.updateBackgroundConfig(config.copy(zoom = it)) },
-                        valueRange = 0.5f..2.0f
-                    )
                 }
 
-                // X & Y Offset Sliders
+                // Interactive Transform (Only if image is set)
+                if (config.imageUri != null) {
+                    GlassSectionCard(title = "IMAGE TRANSFORM") {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            // Aspect Ratio
+                            Text("CANVAS ASPECT RATIO", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            PillSelector(
+                                options = listOf("9:16", "16:9", "1:1", "Free"),
+                                selectedIndex = when (config.aspectRatio) {
+                                    "9:16" -> 0
+                                    "16:9" -> 1
+                                    "1:1" -> 2
+                                    else -> 3
+                                },
+                                onSelect = { idx ->
+                                    val ratio = when (idx) {
+                                        0 -> "9:16"
+                                        1 -> "16:9"
+                                        2 -> "1:1"
+                                        else -> "Free"
+                                    }
+                                    viewModel.updateBackgroundConfig(config.copy(aspectRatio = ratio))
+                                }
+                            )
+
+                            // Scale/Zoom
+                            CompositorSlider("SCALE / ZOOM", config.zoom, 0.1f..3f) { viewModel.updateBackgroundConfig(config.copy(zoom = it)) }
+                            
+                            // Rotation
+                            CompositorSlider("ROTATION", config.rotation, 0f..360f, suffix = "°") { viewModel.updateBackgroundConfig(config.copy(rotation = it)) }
+                            
+                            // Gaussian Blur
+                            CompositorSlider("GAUSSIAN BLUR", config.blurRadius, 0f..30f, suffix = "px") { viewModel.updateBackgroundConfig(config.copy(blurRadius = it)) }
+                            
+                            // Opacity
+                            CompositorSlider("IMAGE OPACITY", config.opacity, 0f..1f) { viewModel.updateBackgroundConfig(config.copy(opacity = it)) }
+                        }
+                    }
+                }
+            } else {
+                // OVERLAYS TAB
+                
+                // Add Buttons
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("X OFFSET", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            Text("${config.offsetX.toInt()}", color = Color(0xFF818CF8), fontSize = 10.sp)
+                    Button(
+                        onClick = { viewModel.addTextOverlay() },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3338BDF8)),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, CyberCyan.copy(alpha = 0.5f))
+                    ) {
+                        Icon(Icons.Default.TextFields, null, tint = CyberCyan)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("ADD TEXT", color = CyberCyan, fontWeight = FontWeight.Black)
+                    }
+                    
+                    Button(
+                        onClick = { viewModel.addEmojiOverlay() },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33A855F7)),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.5f))
+                    ) {
+                        Icon(Icons.Default.Face, null, tint = Color(0xFFA855F7))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("ADD EMOJI", color = Color(0xFFA855F7), fontWeight = FontWeight.Black)
+                    }
+                }
+
+                // Active Layers List
+                Text("ACTIVE LAYERS", color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, fontWeight = FontWeight.Black)
+                
+                config.textOverlays.forEach { overlay ->
+                    OverlayItemCard(
+                        title = "TEXT: ${overlay.text.take(15)}...",
+                        icon = Icons.Default.TextFields,
+                        color = CyberCyan,
+                        onDelete = { viewModel.removeTextOverlay(overlay.id) }
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            GlassTextField(value = overlay.text, onValueChange = { viewModel.updateTextOverlay(overlay.copy(text = it)) }, label = "TEXT CONTENT")
+                            
+                            Text("TEXT COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            ColorRow(selectedColor = overlay.textColor, onSelect = { viewModel.updateTextOverlay(overlay.copy(textColor = it)) })
+                            
+                            Text("NEON GLOW COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            ColorRow(selectedColor = overlay.glowColor, onSelect = { viewModel.updateTextOverlay(overlay.copy(glowColor = it)) })
+
+                            Text("PILL BACKGROUND COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            ColorRow(selectedColor = overlay.backgroundColor, onSelect = { viewModel.updateTextOverlay(overlay.copy(backgroundColor = it)) })
+
+                            CompositorSlider("FONT SIZE", overlay.fontSize.toFloat(), 10f..100f) { viewModel.updateTextOverlay(overlay.copy(fontSize = it.toInt())) }
+                            CompositorSlider("OPACITY", overlay.opacity, 0f..1f) { viewModel.updateTextOverlay(overlay.copy(opacity = it)) }
+                            FeatureToggleRow(title = "SCROLLING TICKER", checked = overlay.isScrolling, onCheckedChange = { viewModel.updateTextOverlay(overlay.copy(isScrolling = it)) })
                         }
-                        GlowingSlider(
-                            value = config.offsetX,
-                            onValueChange = { viewModel.updateBackgroundConfig(config.copy(offsetX = it)) },
-                            valueRange = -50f..50f
-                        )
                     }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Y OFFSET", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            Text("${config.offsetY.toInt()}", color = Color(0xFF818CF8), fontSize = 10.sp)
+                }
+                
+                config.emojiOverlays.forEach { overlay ->
+                    OverlayItemCard(
+                        title = "EMOJI: ${overlay.emoji}",
+                        icon = Icons.Default.Face,
+                        color = Color(0xFFA855F7),
+                        onDelete = { viewModel.removeEmojiOverlay(overlay.id) }
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            EmojiPickerBar(onSelect = { viewModel.updateEmojiOverlay(overlay.copy(emoji = it)) })
+                            CompositorSlider("SCALE", overlay.scale, 0.5f..5f) { viewModel.updateEmojiOverlay(overlay.copy(scale = it)) }
+                            CompositorSlider("ROTATION", overlay.rotation, 0f..360f, suffix = "°") { viewModel.updateEmojiOverlay(overlay.copy(rotation = it)) }
                         }
-                        GlowingSlider(
-                            value = config.offsetY,
-                            onValueChange = { viewModel.updateBackgroundConfig(config.copy(offsetY = it)) },
-                            valueRange = -50f..50f
-                        )
                     }
                 }
 
-                // Blur Slider
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("GAUSSIAN BLUR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${config.blurRadius.toInt()}px", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                    GlowingSlider(
-                        value = config.blurRadius,
-                        onValueChange = { viewModel.updateBackgroundConfig(config.copy(blurRadius = it)) },
-                        valueRange = 0f..30f
-                    )
-                }
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Brightness Slider
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("CANVAS BRIGHTNESS", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${(config.brightness * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                // Emoji Burst Section
+                GlassSectionCard(title = "ANIMATED EMOJI BURST") {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Tap an emoji to trigger a 2-second burst on the live stream.", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp)
+                        EmojiPickerBar(onSelect = { viewModel.triggerEmojiBurst(it) })
                     }
-                    GlowingSlider(
-                        value = config.brightness,
-                        onValueChange = { viewModel.updateBackgroundConfig(config.copy(brightness = it)) },
-                        valueRange = 0.1f..1f
-                    )
-                }
-
-                // Opacity Slider
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("CANVAS OPACITY", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${(config.opacity * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                    GlowingSlider(
-                        value = config.opacity,
-                        onValueChange = { viewModel.updateBackgroundConfig(config.copy(opacity = it)) },
-                        valueRange = 0.1f..1f
-                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        // PiP Controls
-        GlassSectionCard(title = "FOREGROUND VIDEO PiP") {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("VIDEO SCALE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Text("${(config.foregroundScale * 100).toInt()}%", color = Color(0xFF818CF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-                GlowingSlider(
-                    value = config.foregroundScale,
-                    onValueChange = { viewModel.updateBackgroundConfig(config.copy(foregroundScale = it)) },
-                    valueRange = 0.5f..1f
-                )
-
-                Text("VIDEO POSITION", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                PillSelector(
-                    options = listOf("Center", "Top", "Bottom", "Free"),
-                    selectedIndex = when (config.foregroundPosition) {
-                        MainViewModel.ForegroundPosition.CENTER -> 0
-                        MainViewModel.ForegroundPosition.TOP -> 1
-                        MainViewModel.ForegroundPosition.BOTTOM -> 2
-                        MainViewModel.ForegroundPosition.FREE -> 3
-                    },
-                    onSelect = { index ->
-                        val pos = when (index) {
-                            0 -> MainViewModel.ForegroundPosition.CENTER
-                            1 -> MainViewModel.ForegroundPosition.TOP
-                            2 -> MainViewModel.ForegroundPosition.BOTTOM
-                            else -> MainViewModel.ForegroundPosition.FREE
-                        }
-                        viewModel.updateBackgroundConfig(config.copy(foregroundPosition = pos))
-                    }
-                )
-
-                FeatureToggleRow(
-                    title = "BRB / PAUSE SHIELD OVERLAY",
-                    checked = config.isPauseShieldActive,
-                    onCheckedChange = { viewModel.updateBackgroundConfig(config.copy(isPauseShieldActive = it)) }
-                )
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
         Button(
             onClick = onDismiss,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0x3338BDF8)),
-            shape = RoundedCornerShape(12.dp)
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
+            shape = RoundedCornerShape(16.dp)
         ) {
-            Text("CLOSE STUDIO", color = Color(0xFF38BDF8), fontWeight = FontWeight.Black)
+            Text("DONE", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+    }
+}
+
+@Composable
+fun CompositorSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, suffix: String = "", onValueChange: (Float) -> Unit) {
+    Column {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text("${if (range.endInclusive <= 1f) (value * 100).toInt() else value.toInt()}$suffix", color = CyberCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        GlowingSlider(value = value, onValueChange = onValueChange, valueRange = range)
+    }
+}
+
+@Composable
+fun OverlayItemCard(title: String, icon: ImageVector, color: Color, onDelete: () -> Unit, content: @Composable () -> Unit) {
+    var isExpanded by remember { mutableStateOf(false) }
+    Surface(
+        color = Color(0xBF1E2330),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, if (isExpanded) color.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.1f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(icon, null, tint = color, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Row {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Delete, null, tint = CrimsonRed, modifier = Modifier.size(16.dp))
+                    }
+                    Icon(if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = Color.Gray)
+                }
+            }
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(16.dp))
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+fun EmojiPickerBar(onSelect: (String) -> Unit) {
+    val emojis = listOf("🔥", "❤️", "⚽", "🎙️", "🔴", "👏", "⚡", "🌟", "🎮", "👑")
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        emojis.forEach { emoji ->
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.1f))
+                    .clickable { onSelect(emoji) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(emoji, fontSize = 20.sp)
+            }
         }
     }
 }
@@ -1943,3 +2078,93 @@ fun ScreenCapturePreviewCard(
     }
 }
 
+@Composable
+fun QuickGlassAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .size(64.dp)
+            .shadow(4.dp, CircleShape, ambientColor = Color.Cyan.copy(alpha = 0.2f), spotColor = Color.Cyan.copy(alpha = 0.2f)),
+        color = Color(0x990F172A),
+        shape = CircleShape,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(4.dp)
+        ) {
+            Icon(icon, null, tint = CyberCyan, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = label,
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun DraggableOverlay(
+    x: Float,
+    y: Float,
+    onPositionChange: (Float, Float) -> Unit,
+    content: @Composable () -> Unit
+) {
+    var offsetX by remember { mutableFloatStateOf(x) }
+    var offsetY by remember { mutableFloatStateOf(y) }
+
+    Box(
+        modifier = Modifier
+            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    offsetX += dragAmount.x
+                    offsetY += dragAmount.y
+                    onPositionChange(offsetX, offsetY)
+                }
+            }
+    ) {
+        content()
+    }
+}
+
+@Composable
+fun ColorRow(selectedColor: Int, onSelect: (Int) -> Unit) {
+    val colors = listOf(
+        0xFFFFFFFF.toInt(), // White
+        0xFF00F2FF.toInt(), // Cyan
+        0xFFFF2A54.toInt(), // Crimson
+        0xFF53FC18.toInt(), // Green
+        0xFF9146FF.toInt(), // Purple
+        0xFFF59E0B.toInt(), // Orange
+        0xFF000000.toInt(), // Black
+        0x80000000.toInt()  // Transparent Black
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        colors.forEach { colorInt ->
+            val color = Color(colorInt)
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(color)
+                    .border(2.dp, if (selectedColor == colorInt) Color.White else Color.Transparent, CircleShape)
+                    .clickable { onSelect(colorInt) }
+            )
+        }
+    }
+}

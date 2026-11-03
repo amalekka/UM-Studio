@@ -38,8 +38,46 @@ class MainViewModel : ViewModel() {
 
     private var service: LiveStreamService? = null
 
+    private val liveChatConnector = com.example.core.chat.LiveChatConnector()
+    private val audioSfxManager = com.example.core.audio.AudioSfxManager()
+
+    init {
+        viewModelScope.launch {
+            liveChatConnector.incomingMessages.collect { msg ->
+                addIncomingChatMessage(msg.platform, msg.author, msg.message)
+            }
+        }
+    }
+
     enum class M3u8PlaybackState { STOPPED, PLAYING, PAUSED }
     enum class ImageDisplayMode { FULL_IMAGE, PIP_OVERLAY, OFF }
+    enum class CanvasScaleMode { FIT, FILL, STRETCH }
+
+    data class TextOverlay(
+        val id: String = UUID.randomUUID().toString(),
+        val text: String = "LIVE STREAM",
+        val fontSize: Int = 40,
+        val textColor: Int = 0xFFFFFFFF.toInt(),
+        val glowColor: Int = 0xFF00F2FF.toInt(),
+        val backgroundColor: Int = 0x80000000.toInt(),
+        val x: Float = 20f,
+        val y: Float = 20f,
+        val scale: Float = 1f,
+        val rotation: Float = 0f,
+        val isScrolling: Boolean = false,
+        val scrollSpeed: Float = 1f,
+        val opacity: Float = 1f
+    )
+
+    data class EmojiOverlay(
+        val id: String = UUID.randomUUID().toString(),
+        val emoji: String = "🔥",
+        val x: Float = 50f,
+        val y: Float = 50f,
+        val scale: Float = 1f,
+        val rotation: Float = 0f,
+        val opacity: Float = 1f
+    )
 
     data class BackgroundConfig(
         val imageUri: String? = null,
@@ -50,10 +88,14 @@ class MainViewModel : ViewModel() {
         val zoom: Float = 1f,
         val offsetX: Float = 0f,
         val offsetY: Float = 0f,
+        val rotation: Float = 0f,
+        val aspectRatio: String = "Free",
         val scaleMode: BackgroundScaleMode = BackgroundScaleMode.COVER,
         val foregroundScale: Float = 1f,
         val foregroundPosition: ForegroundPosition = ForegroundPosition.CENTER,
-        val isPauseShieldActive: Boolean = false
+        val isPauseShieldActive: Boolean = false,
+        val textOverlays: List<TextOverlay> = emptyList(),
+        val emojiOverlays: List<EmojiOverlay> = emptyList()
     )
 
     enum class BackgroundScaleMode { COVER, CONTAIN, TOP_BANNER, BOTTOM_BANNER, STRETCH }
@@ -77,6 +119,7 @@ class MainViewModel : ViewModel() {
 
     data class UiState(
         val isStreaming: Boolean = false,
+        val isPaused: Boolean = false,
         val streamingStatus: StreamingStatus = StreamingStatus.IDLE,
         val diagnosticMessage: String = "Ready",
         val diagnosticIsError: Boolean = false,
@@ -125,7 +168,15 @@ class MainViewModel : ViewModel() {
         val isFacecamEnabled: Boolean = false,
         val facecamX: Float = 20f,
         val facecamY: Float = 160f,
-        val chatMessages: List<ChatMessage> = emptyList()
+        val canvasScaleMode: CanvasScaleMode = CanvasScaleMode.FIT,
+        val canvasZoom: Float = 1f,
+        val canvasOffsetX: Float = 0f,
+        val canvasOffsetY: Float = 0f,
+        val chatMessages: List<ChatMessage> = emptyList(),
+        val isRecording: Boolean = false,
+        val twitchChannel: String = "",
+        val youtubeChannel: String = "",
+        val pinnedComment: ChatMessage? = null
     )
 
     private var pendingView: OpenGlView? = null
@@ -817,10 +868,32 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun togglePauseStream() {
+        val currentPaused = _uiState.value.isPaused
+        val newPaused = !currentPaused
+        _uiState.value = _uiState.value.copy(
+            isPaused = newPaused,
+            diagnosticMessage = if (newPaused) "STREAM PAUSED" else "Streaming Video (${_uiState.value.fps} FPS)",
+            diagnosticIsError = false
+        )
+        
+        if (newPaused) {
+            service?.getStreamManager()?.muteAudio()
+        } else {
+            if (_uiState.value.isMicEnabled) {
+                service?.getStreamManager()?.unmuteAudio()
+            }
+        }
+        
+        val bgConfig = _uiState.value.bgConfig.copy(isPauseShieldActive = newPaused)
+        updateBackgroundConfig(bgConfig)
+    }
+
     fun stopStream() {
         // UI THREAD: Immediately reset UI state and timer to maintain locked 60 FPS without freezing
         _uiState.value = _uiState.value.copy(
             isStreaming = false,
+            isPaused = false,
             streamingStatus = StreamingStatus.IDLE,
             currentBitrate = 0,
             fps = 0,
@@ -1210,7 +1283,148 @@ class MainViewModel : ViewModel() {
         service?.getProManager()?.onVersionClick()
     }
 
+    fun setCanvasScaleMode(mode: CanvasScaleMode) {
+        _uiState.value = _uiState.value.copy(canvasScaleMode = mode)
+    }
+
+    fun updateCanvasTransform(zoom: Float, offsetX: Float, offsetY: Float) {
+        _uiState.value = _uiState.value.copy(
+            canvasZoom = zoom,
+            canvasOffsetX = offsetX,
+            canvasOffsetY = offsetY
+        )
+    }
+
+    fun addTextOverlay() {
+        val newText = TextOverlay()
+        val updated = _uiState.value.bgConfig.copy(
+            textOverlays = _uiState.value.bgConfig.textOverlays + newText
+        )
+        updateBackgroundConfig(updated)
+    }
+
+    fun updateTextOverlay(overlay: TextOverlay) {
+        val overlays = _uiState.value.bgConfig.textOverlays.map {
+            if (it.id == overlay.id) overlay else it
+        }
+        updateBackgroundConfig(_uiState.value.bgConfig.copy(textOverlays = overlays))
+    }
+
+    fun removeTextOverlay(id: String) {
+        val overlays = _uiState.value.bgConfig.textOverlays.filterNot { it.id == id }
+        updateBackgroundConfig(_uiState.value.bgConfig.copy(textOverlays = overlays))
+    }
+
+    fun addEmojiOverlay(emoji: String = "🔥") {
+        val newEmoji = EmojiOverlay(emoji = emoji)
+        val updated = _uiState.value.bgConfig.copy(
+            emojiOverlays = _uiState.value.bgConfig.emojiOverlays + newEmoji
+        )
+        updateBackgroundConfig(updated)
+    }
+
+    fun updateEmojiOverlay(overlay: EmojiOverlay) {
+        val overlays = _uiState.value.bgConfig.emojiOverlays.map {
+            if (it.id == overlay.id) overlay else it
+        }
+        updateBackgroundConfig(_uiState.value.bgConfig.copy(emojiOverlays = overlays))
+    }
+
+    fun removeEmojiOverlay(id: String) {
+        val overlays = _uiState.value.bgConfig.emojiOverlays.filterNot { it.id == id }
+        updateBackgroundConfig(_uiState.value.bgConfig.copy(emojiOverlays = overlays))
+    }
+
+    fun triggerEmojiBurst(emoji: String) {
+        viewModelScope.launch {
+            val burstItems = (1..5).map {
+                EmojiOverlay(
+                    id = UUID.randomUUID().toString(),
+                    emoji = emoji,
+                    x = (10..90).random().toFloat(),
+                    y = (20..80).random().toFloat(),
+                    scale = (1..3).random().toFloat()
+                )
+            }
+            
+            val currentConfig = _uiState.value.bgConfig
+            updateBackgroundConfig(currentConfig.copy(emojiOverlays = currentConfig.emojiOverlays + burstItems))
+            
+            delay(2000)
+            
+            val configAfter = _uiState.value.bgConfig
+            val idsToRemove = burstItems.map { it.id }.toSet()
+            updateBackgroundConfig(configAfter.copy(emojiOverlays = configAfter.emojiOverlays.filterNot { it.id in idsToRemove }))
+        }
+    }
+
+    fun connectTwitchChat(channel: String) {
+        _uiState.value = _uiState.value.copy(twitchChannel = channel)
+        if (channel.isNotBlank()) {
+            liveChatConnector.connectTwitchChat(channel)
+        } else {
+            liveChatConnector.disconnectTwitchChat()
+        }
+    }
+
+    fun connectYouTubeChat(idOrChannel: String) {
+        _uiState.value = _uiState.value.copy(youtubeChannel = idOrChannel)
+        if (idOrChannel.isNotBlank()) {
+            liveChatConnector.connectYouTubeChat(idOrChannel)
+        }
+    }
+
+    fun pinComment(message: ChatMessage) {
+        _uiState.value = _uiState.value.copy(pinnedComment = message)
+        val overlayText = "📌 [${message.platform}] ${message.author}: ${message.message}"
+        val pinnedOverlay = TextOverlay(
+            id = "pinned_comment_overlay",
+            text = overlayText,
+            fontSize = 30,
+            textColor = 0xFFFFFFFF.toInt(),
+            glowColor = 0xFF00F2FF.toInt(),
+            backgroundColor = 0xCC070A12.toInt(),
+            x = 10f,
+            y = 75f
+        )
+        val filteredOverlays = _uiState.value.bgConfig.textOverlays.filterNot { it.id == "pinned_comment_overlay" }
+        updateBackgroundConfig(_uiState.value.bgConfig.copy(textOverlays = filteredOverlays + pinnedOverlay))
+    }
+
+    fun unpinComment() {
+        _uiState.value = _uiState.value.copy(pinnedComment = null)
+        removeTextOverlay("pinned_comment_overlay")
+    }
+
+    fun playSfx(type: com.example.core.audio.AudioSfxManager.SfxType) {
+        audioSfxManager.playSfx(type)
+    }
+
+    fun toggleRecording(context: Context) {
+        val manager = service?.getStreamManager() ?: return
+        if (_uiState.value.isRecording) {
+            manager.stopRecord()
+            _uiState.value = _uiState.value.copy(isRecording = false)
+            Toast.makeText(context, "Recording saved to device storage", Toast.LENGTH_SHORT).show()
+        } else {
+            val recordDir = File(context.getExternalFilesDir(null) ?: context.filesDir, "Recordings")
+            if (!recordDir.exists()) recordDir.mkdirs()
+            val fileName = "Studio_REC_${System.currentTimeMillis()}.mp4"
+            val filePath = File(recordDir, fileName).absolutePath
+            val success = manager.startRecord(filePath)
+            if (success) {
+                _uiState.value = _uiState.value.copy(isRecording = true)
+                Toast.makeText(context, "Recording started...", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Failed to start local recording", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun shutdownApp(context: Context) {
+        try {
+            liveChatConnector.disconnectAll()
+        } catch (_: Exception) {}
         try {
             stopStream()
         } catch (e: Exception) {}

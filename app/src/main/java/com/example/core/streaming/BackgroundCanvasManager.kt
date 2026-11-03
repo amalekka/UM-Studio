@@ -25,6 +25,9 @@ class BackgroundCanvasManager(
     private var backgroundFilter: ImageObjectFilterRender? = null
     private var pauseShieldFilter: ImageObjectFilterRender? = null
     
+    private val textFilters = mutableMapOf<String, ImageObjectFilterRender>()
+    private val emojiFilters = mutableMapOf<String, ImageObjectFilterRender>()
+
     private var currentConfig = MainViewModel.BackgroundConfig()
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
@@ -44,10 +47,115 @@ class BackgroundCanvasManager(
                 applyFilterTransforms()
             }
         }
+
+        updateOverlays(config, oldConfig)
         
         if (config.isPauseShieldActive != oldConfig.isPauseShieldActive) {
             togglePauseShield(config.isPauseShieldActive)
         }
+    }
+
+    private fun updateOverlays(config: MainViewModel.BackgroundConfig, oldConfig: MainViewModel.BackgroundConfig) {
+        // Handle Text Overlays
+        val currentTextIds = config.textOverlays.map { it.id }.toSet()
+        val oldTextIds = textFilters.keys.toSet()
+        
+        // Remove old
+        oldTextIds.subtract(currentTextIds).forEach { textFilters.remove(it) }
+        
+        // Update or Add
+        config.textOverlays.forEach { overlay ->
+            val oldOverlay = oldConfig.textOverlays.find { it.id == overlay.id }
+            if (oldOverlay == null || isTextVisualChanged(overlay, oldOverlay)) {
+                val filter = textFilters[overlay.id] ?: ImageObjectFilterRender()
+                val bitmap = createTextBitmap(overlay)
+                filter.setImage(bitmap)
+                textFilters[overlay.id] = filter
+            }
+            
+            textFilters[overlay.id]?.let { filter ->
+                filter.setScale(overlay.scale * 20f, overlay.scale * 10f) // Arbitrary scale for text
+                filter.setPosition(overlay.x, overlay.y)
+                filter.setRotation(overlay.rotation.toInt())
+            }
+        }
+
+        // Handle Emoji Overlays
+        val currentEmojiIds = config.emojiOverlays.map { it.id }.toSet()
+        val oldEmojiIds = emojiFilters.keys.toSet()
+        
+        oldEmojiIds.subtract(currentEmojiIds).forEach { emojiFilters.remove(it) }
+        
+        config.emojiOverlays.forEach { overlay ->
+            val oldOverlay = oldConfig.emojiOverlays.find { it.id == overlay.id }
+            if (oldOverlay == null || isEmojiVisualChanged(overlay, oldOverlay)) {
+                val filter = emojiFilters[overlay.id] ?: ImageObjectFilterRender()
+                val bitmap = createEmojiBitmap(overlay)
+                filter.setImage(bitmap)
+                emojiFilters[overlay.id] = filter
+            }
+            
+            emojiFilters[overlay.id]?.let { filter ->
+                filter.setScale(overlay.scale * 10f, overlay.scale * 10f)
+                filter.setPosition(overlay.x, overlay.y)
+                filter.setRotation(overlay.rotation.toInt())
+            }
+        }
+        
+        refreshFilters()
+    }
+
+    private fun isTextVisualChanged(n: MainViewModel.TextOverlay, o: MainViewModel.TextOverlay): Boolean {
+        return n.text != o.text || n.fontSize != o.fontSize || n.textColor != o.textColor || 
+               n.glowColor != o.glowColor || n.backgroundColor != o.backgroundColor || n.opacity != o.opacity
+    }
+
+    private fun isEmojiVisualChanged(n: MainViewModel.EmojiOverlay, o: MainViewModel.EmojiOverlay): Boolean {
+        return n.emoji != o.emoji || n.opacity != o.opacity
+    }
+
+    private fun createTextBitmap(overlay: MainViewModel.TextOverlay): Bitmap {
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = overlay.fontSize.toFloat()
+            color = overlay.textColor
+            textAlign = android.graphics.Paint.Align.LEFT
+            if (overlay.glowColor != 0) {
+                setShadowLayer(10f, 0f, 0f, overlay.glowColor)
+            }
+        }
+        
+        val bounds = android.graphics.Rect()
+        paint.getTextBounds(overlay.text, 0, overlay.text.length, bounds)
+        
+        val padding = 20
+        val width = bounds.width() + padding * 2
+        val height = bounds.height() + padding * 2
+        
+        val bitmap = Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        
+        if (overlay.backgroundColor != 0) {
+            val bgPaint = android.graphics.Paint().apply { color = overlay.backgroundColor }
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), 12f, 12f, bgPaint)
+        }
+        
+        canvas.drawText(overlay.text, padding.toFloat(), height / 2f + bounds.height() / 2f, paint)
+        return bitmap
+    }
+
+    private fun createEmojiBitmap(overlay: MainViewModel.EmojiOverlay): Bitmap {
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 80f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        
+        val width = 120
+        val height = 120
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        
+        canvas.drawText(overlay.emoji, width / 2f, height / 2f + 30f, paint)
+        return bitmap
     }
 
     private fun loadImage(uri: String?) {
@@ -330,11 +438,61 @@ class BackgroundCanvasManager(
         refreshFilters()
     }
 
+    private fun createPauseShieldBitmap(): Bitmap {
+        val width = 1080
+        val height = 1920
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        
+        canvas.drawColor(0xFF070A12.toInt())
+        
+        val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x1A00F2FF.toInt()
+            style = android.graphics.Paint.Style.FILL
+        }
+        canvas.drawCircle(width / 2f, height / 2f, 350f, bgPaint)
+        
+        val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF00F2FF.toInt()
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 12f
+            setShadowLayer(30f, 0f, 0f, 0xFF00F2FF.toInt())
+        }
+        canvas.drawCircle(width / 2f, height / 2f - 100f, 120f, circlePaint)
+        
+        val barPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF00F2FF.toInt()
+            style = android.graphics.Paint.Style.FILL
+        }
+        canvas.drawRoundRect(width / 2f - 40f, height / 2f - 160f, width / 2f - 10f, height / 2f - 40f, 10f, 10f, barPaint)
+        canvas.drawRoundRect(width / 2f + 10f, height / 2f - 160f, width / 2f + 40f, height / 2f - 40f, 10f, 10f, barPaint)
+        
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 72f
+            color = 0xFFFFFFFF.toInt()
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setShadowLayer(20f, 0f, 0f, 0xFF00F2FF.toInt())
+        }
+        canvas.drawText("STREAM PAUSED", width / 2f, height / 2f + 120f, textPaint)
+        
+        val subPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 38f
+            color = 0xFFF59E0B.toInt()
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("BE RIGHT BACK...", width / 2f, height / 2f + 200f, subPaint)
+        
+        return bitmap
+    }
+
     private fun togglePauseShield(active: Boolean) {
         if (active) {
-            if (pauseShieldFilter == null && processedBackground != null) {
+            if (pauseShieldFilter == null) {
+                val bitmap = createPauseShieldBitmap()
                 pauseShieldFilter = ImageObjectFilterRender().apply {
-                    setImage(processedBackground!!)
+                    setImage(bitmap)
                     setScale(100f, 100f)
                     setPosition(0f, 0f)
                 }
@@ -354,13 +512,19 @@ class BackgroundCanvasManager(
         // 2. Main video layer (M3U8)
         service.getRestreamEngine()?.surfaceFilter?.let { filterList.add(it) }
         
-        // 3. Pro Overlay layers (Watermark, Ticker)
+        // 3. Text Overlays
+        filterList.addAll(textFilters.values)
+        
+        // 4. Emoji Overlays
+        filterList.addAll(emojiFilters.values)
+        
+        // 5. Pro Overlay layers (Watermark, Ticker)
         service.getProManager()?.let { pro ->
             pro.getWatermarkFilter()?.let { filterList.add(it) }
             pro.getTickerFilter()?.let { filterList.add(it) }
         }
         
-        // 4. Pause shield (Topmost)
+        // 6. Pause shield (Topmost)
         pauseShieldFilter?.let { filterList.add(it) }
         
         if (filterList.isNotEmpty()) {
