@@ -247,7 +247,7 @@ class M3u8RestreamEngine(
             "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k"
         }
 
-        val cmd = "$headerPrefix-re -i \"$m3u8\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 $outArgs"
+        val cmd = "$headerPrefix-rw_timeout 15000000 -re -i \"$m3u8\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
         Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
 
         stopFfmpeg()
@@ -267,14 +267,32 @@ class M3u8RestreamEngine(
     ) {
         ffmpegSession = FFmpegKit.executeAsync(cmd, { session ->
             Log.i("M3u8Engine", "FFmpeg restream completed with state: ${session.state}, code: ${session.returnCode}")
+            val returnCode = session.returnCode
+            if (com.arthenica.ffmpegkit.ReturnCode.isCancel(returnCode)) {
+                Log.i("M3u8Engine", "FFmpeg session was cancelled.")
+                return@executeAsync
+            }
             if (_isRestreaming.value && allowFallbackToTranscode && session.returnCode?.isValueSuccess != true) {
                 Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
                 _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
                 _diagnosticIsError.value = false
-                val transcodeCmd = "$headerPrefix-re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -c:a aac -b:a 128k -ar 44100 $outArgs"
+                val transcodeCmd = "$headerPrefix-rw_timeout 15000000 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -c:a aac -b:a 128k -ar 44100 -map 0:v:0 -map 0:a:0? $outArgs"
                 executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
             } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
-                _diagnosticMessage.value = "RTMP Error: Session Closed"
+                val logs = session.allLogsAsString ?: ""
+                val meaningfulError = logs.lineSequence()
+                    .map { it.trim() }
+                    .filter { line ->
+                        line.isNotEmpty() &&
+                        !line.startsWith("configuration:", true) &&
+                        !line.startsWith("libav", true) &&
+                        !line.startsWith("Hyper Fast", true) &&
+                        !line.startsWith("built with", true) &&
+                        !line.contains("frame=", true)
+                    }
+                    .lastOrNull() ?: "Session Closed"
+                val cleanError = if (meaningfulError.length > 50) meaningfulError.take(50) + "..." else meaningfulError
+                _diagnosticMessage.value = "RTMP Error: $cleanError"
                 _diagnosticIsError.value = true
             }
         }, { log ->
@@ -417,7 +435,9 @@ class M3u8RestreamEngine(
 
     fun stopFfmpeg() {
         try {
-            FFmpegKit.cancel()
+            ffmpegSession?.let { session ->
+                FFmpegKit.cancel(session.sessionId)
+            }
             ffmpegSession = null
         } catch (e: Exception) {
             Log.e("M3u8Engine", "Error stopping FFmpeg", e)

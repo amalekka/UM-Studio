@@ -69,9 +69,37 @@ import java.io.File
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val currentTab = uiState.currentTab
+    val context = LocalContext.current
+    var showExitDialog by remember { mutableStateOf(false) }
 
-    androidx.activity.compose.BackHandler(enabled = currentTab != 0) {
-        viewModel.setCurrentTab(0)
+    androidx.activity.compose.BackHandler(enabled = true) {
+        if (currentTab != 0) {
+            viewModel.setCurrentTab(0)
+        } else {
+            showExitDialog = true
+        }
+    }
+
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitDialog = false },
+            title = { Text("Exit Application", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = { Text("Do you want to stop streaming, stop background services, and exit the app completely?", color = Color.White.copy(alpha = 0.8f)) },
+            containerColor = Color(0xFF0D111C),
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitDialog = false
+                    viewModel.shutdownApp(context)
+                }) {
+                    Text("EXIT & STOP", color = Color(0xFFEF4444), fontWeight = FontWeight.Black)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitDialog = false }) {
+                    Text("CANCEL", color = Color.Gray, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -389,8 +417,8 @@ fun StudioPreviewScreen(
         if (!isFullImageActive && !isPipActive) {
             when (uiState.currentSource) {
                 StreamSource.M3U8 -> {
-                    if (uiState.m3u8State != MainViewModel.M3u8PlaybackState.STOPPED) {
-                        val m3u8Player = remember(uiState.m3u8Url) {
+                    if (uiState.m3u8State != MainViewModel.M3u8PlaybackState.STOPPED || uiState.isStreaming) {
+                        val m3u8Player = remember(uiState.m3u8Url, uiState.isStreaming) {
                             viewModel.getRestreamEngine()?.getPlayer()
                         }
                         if (m3u8Player != null) {

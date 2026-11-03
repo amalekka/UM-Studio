@@ -1094,4 +1094,18 @@ class MainViewModel : ViewModel() {
     fun onVersionClick() {
         service?.getProManager()?.onVersionClick()
     }
+
+    fun shutdownApp(context: Context) {
+        try {
+            stopStream()
+        } catch (e: Exception) {}
+        try {
+            val serviceIntent = Intent(context, LiveStreamService::class.java)
+            context.stopService(serviceIntent)
+        } catch (e: Exception) {}
+        try {
+            (context as? android.app.Activity)?.finishAffinity()
+        } catch (e: Exception) {}
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
 }

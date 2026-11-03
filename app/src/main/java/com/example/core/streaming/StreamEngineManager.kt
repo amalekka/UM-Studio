@@ -360,22 +360,37 @@ class StreamEngineManager(
 
     fun startStream(url: String, mediaProjectionResult: Intent? = null) {
         if (isReleased) return
+        if (isStreaming()) {
+            Log.w("StreamEngine", "Stream already running, ignoring startStream call")
+            return
+        }
         
         _status.value = StreamingStatus.CONNECTING
         _diagnosticMessage.value = "Connecting to RTMP..."
         _diagnosticIsError.value = false
-        if (currentSource == StreamSource.CAMERA) {
-            if (rtmpCamera2?.isOnPreview == false) {
-                startPreview()
+        try {
+            if (currentSource == StreamSource.CAMERA) {
+                if (rtmpCamera2?.isOnPreview == false) {
+                    startPreview()
+                }
+                if (rtmpCamera2?.isStreaming == false) {
+                    rtmpCamera2?.startStream(url)
+                }
+            } else if (currentSource == StreamSource.M3U8) {
+                _status.value = StreamingStatus.STREAMING
+            } else {
+                mediaProjectionResult?.let {
+                    rtmpDisplay?.setIntentResult(-1, it)
+                    if (rtmpDisplay?.isStreaming == false) {
+                        rtmpDisplay?.startStream(url)
+                    }
+                }
             }
-            rtmpCamera2?.startStream(url)
-        } else if (currentSource == StreamSource.M3U8) {
-            _status.value = StreamingStatus.STREAMING
-        } else {
-            mediaProjectionResult?.let {
-                rtmpDisplay?.setIntentResult(-1, it)
-                rtmpDisplay?.startStream(url)
-            }
+        } catch (e: Exception) {
+            Log.e("StreamEngine", "Error starting stream codec: ${e.message}", e)
+            _status.value = StreamingStatus.ERROR
+            _diagnosticIsError.value = true
+            _diagnosticMessage.value = "Start Error: ${e.message}"
         }
     }
 
