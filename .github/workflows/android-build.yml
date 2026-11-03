@@ -132,7 +132,7 @@ jobs:
             fi
           done
 
-          # 7. Generate NativeRtmpBridge.java + register it in MainActivity
+          # 7. Generate NativeRtmpBridge.java
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
@@ -288,72 +288,53 @@ jobs:
 
             sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
 
-            # Register the bridge in MainActivity (safe for both Kotlin & Java + Capacitor)
-            if [[ "$MAIN_FILE" == *.kt ]]; then
-              if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
-                # Add import
+            # === Safe registration of NativeRtmpBridge in MainActivity ===
+            if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
+              # Add import
+              if [[ "$MAIN_FILE" == *.kt ]]; then
                 if ! grep -q "import android.webkit.WebView" "$MAIN_FILE"; then
                   sed -i '/^package /a import android.webkit.WebView' "$MAIN_FILE"
                 fi
-                # Insert registration after super.onCreate
-                python3 -c '
-import sys
-with open(sys.argv[1], "r") as f:
-    content = f.read()
-marker = "super.onCreate"
-if marker in content and "NativeRtmpBridge" not in content:
-    insert = """
-        try {
-            val bridgeWebView = try {
-                val bridge = Class.forName("com.getcapacitor.BridgeActivity").getMethod("getBridge").invoke(this)
-                Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(bridge) as? WebView
-            } catch (e: Exception) { null }
-            val webView = bridgeWebView ?: findViewById(android.R.id.content)
-            if (webView is WebView) {
-                webView.addJavascriptInterface(NativeRtmpBridge(this, webView), "NativeRtmpBridge")
-                android.util.Log.d("UMStudio", "NativeRtmpBridge registered")
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("UMStudio", "Failed to register NativeRtmpBridge", e)
-        }
-"""
-    content = content.replace(marker, marker + insert, 1)
-    with open(sys.argv[1], "w") as f:
-        f.write(content)
-' "$MAIN_FILE"
-              fi
-            else
-              # Java version
-              if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
+              else
                 if ! grep -q "import android.webkit.WebView;" "$MAIN_FILE"; then
                   sed -i '/^package /a import android.webkit.WebView;' "$MAIN_FILE"
                 fi
-                python3 -c '
-import sys
-with open(sys.argv[1], "r") as f:
-    content = f.read()
-marker = "super.onCreate"
-if marker in content and "NativeRtmpBridge" not in content:
-    insert = """
+              fi
+
+              # Create a small helper file that will be injected
+              cat > /tmp/register_bridge.txt << 'REGISTER'
+        // === NativeRtmpBridge Registration (auto-injected) ===
         try {
-            WebView webView = null;
+            android.webkit.WebView targetWebView = null;
             try {
                 Object bridge = Class.forName("com.getcapacitor.BridgeActivity").getMethod("getBridge").invoke(this);
-                webView = (WebView) Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(bridge);
+                targetWebView = (android.webkit.WebView) Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(bridge);
             } catch (Exception ignored) {}
-            if (webView == null) webView = findViewById(android.R.id.content);
-            if (webView != null) {
-                webView.addJavascriptInterface(new NativeRtmpBridge(this, webView), "NativeRtmpBridge");
-                android.util.Log.d("UMStudio", "NativeRtmpBridge registered");
+            if (targetWebView == null) {
+                targetWebView = findViewById(android.R.id.content);
+            }
+            if (targetWebView != null) {
+                targetWebView.addJavascriptInterface(new NativeRtmpBridge(this, targetWebView), "NativeRtmpBridge");
+                android.util.Log.d("UMStudio", "NativeRtmpBridge registered successfully");
             }
         } catch (Exception e) {
             android.util.Log.e("UMStudio", "Failed to register NativeRtmpBridge", e);
         }
-"""
-    content = content.replace(marker, marker + insert, 1)
-    with open(sys.argv[1], "w") as f:
-        f.write(content)
-' "$MAIN_FILE"
+        // === End NativeRtmpBridge Registration ===
+REGISTER
+
+              # Inject after super.onCreate
+              if grep -q "super.onCreate" "$MAIN_FILE"; then
+                # Use awk for safer multi-line insertion
+                awk '
+                  /super\.onCreate/ {
+                    print
+                    while ((getline line < "/tmp/register_bridge.txt") > 0) print line
+                    close("/tmp/register_bridge.txt")
+                    next
+                  }
+                  { print }
+                ' "$MAIN_FILE" > /tmp/MainActivity_new && mv /tmp/MainActivity_new "$MAIN_FILE"
               fi
             fi
           fi
