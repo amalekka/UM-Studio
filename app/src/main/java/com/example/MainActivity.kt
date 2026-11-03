@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -126,8 +127,36 @@ class MainActivity : ComponentActivity() {
         mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    private fun acquireWakeLock() {
+        if (wakeLock == null) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "UMStudio::StreamingWakeLock")
+        }
+        if (wakeLock?.isHeld == false) {
+            wakeLock?.acquire(10 * 60 * 60 * 1000L)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (e: Exception) {}
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (viewModel?.uiState?.value?.isStreaming == true) {
+            acquireWakeLock()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        releaseWakeLock()
         if (isBound) {
             unbindService(mServiceConnection)
             isBound = false
