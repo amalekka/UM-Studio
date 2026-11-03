@@ -44,19 +44,14 @@ jobs:
         run: |
           set -e
 
-          # 1. Create .env file
           touch .env
-          if [ -f ".env.example" ]; then
-            cp .env.example .env
-          fi
+          if [ -f ".env.example" ]; then cp .env.example .env; fi
 
-          # 2. Extract passwords safely
           SP="${{ secrets.STORE_PASSWORD }}"
           if [ -z "$SP" ]; then SP="android"; fi
           KP="${{ secrets.KEY_PASSWORD }}"
           if [ -z "$KP" ]; then KP="android"; fi
 
-          # 3. Validate or Generate Release Keystore
           if [ -f "my-upload-key.jks" ]; then
             if ! keytool -list -keystore my-upload-key.jks -storepass "$SP" >/dev/null 2>&1; then
               rm -f my-upload-key.jks app/my-upload-key.jks
@@ -64,15 +59,7 @@ jobs:
           fi
 
           if [ ! -f "my-upload-key.jks" ]; then
-            keytool -genkey -v \
-              -keystore my-upload-key.jks \
-              -alias upload \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass "$SP" \
-              -keypass "$KP" \
-              -dname "CN=UM Studio,O=AIStudio,C=US"
+            keytool -genkey -v -keystore my-upload-key.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass "$SP" -keypass "$KP" -dname "CN=UM Studio,O=AIStudio,C=US"
           fi
 
           cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
@@ -81,7 +68,6 @@ jobs:
           echo "STORE_PASSWORD=${SP}" >> $GITHUB_ENV
           echo "KEY_PASSWORD=${KP}" >> $GITHUB_ENV
 
-          # 4. Sync Web UI if package.json exists
           if [ -f "package.json" ]; then
             npm install --legacy-peer-deps || true
             npm run build || true
@@ -93,20 +79,9 @@ jobs:
             npx cap sync android 2>/dev/null || true
           fi
 
-          # 5. Inject Android Permissions & usesCleartextTraffic
           for MANIFEST in "app/src/main/AndroidManifest.xml" "android/app/src/main/AndroidManifest.xml"; do
             if [ -f "$MANIFEST" ]; then
-              REQUIRED_PERMISSIONS=(
-                "android.permission.INTERNET"
-                "android.permission.CAMERA"
-                "android.permission.RECORD_AUDIO"
-                "android.permission.MODIFY_AUDIO_SETTINGS"
-                "android.permission.WAKE_LOCK"
-                "android.permission.FOREGROUND_SERVICE"
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
-              )
-              for PERM in "${REQUIRED_PERMISSIONS[@]}"; do
+              for PERM in "android.permission.INTERNET" "android.permission.CAMERA" "android.permission.RECORD_AUDIO" "android.permission.MODIFY_AUDIO_SETTINGS" "android.permission.WAKE_LOCK" "android.permission.FOREGROUND_SERVICE" "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"; do
                 if ! grep -q "$PERM" "$MANIFEST"; then
                   sed -i "/<application/i \    <uses-permission android:name=\"$PERM\" />" "$MANIFEST"
                 fi
@@ -117,7 +92,6 @@ jobs:
             fi
           done
 
-          # 6. Inject ffmpeg-kit-https-gpl dependency
           for GRADLE_FILE in "app/build.gradle" "app/build.gradle.kts" "android/app/build.gradle" "android/app/build.gradle.kts"; do
             if [ -f "$GRADLE_FILE" ]; then
               sed -i 's/minSdk = [0-9]*/minSdk = 24/g; s/minSdkVersion [0-9]*/minSdkVersion 24/g' "$GRADLE_FILE"
@@ -132,14 +106,13 @@ jobs:
             fi
           done
 
-          # 7. Generate NativeRtmpBridge.java
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
             PKG_NAME=$(grep "^package " "$MAIN_FILE" | head -n 1 | sed 's/package //;s/;//' | tr -d '\r\n ')
-            echo "Injecting NativeRtmpBridge.java into package $PKG_NAME at $PKG_DIR..."
+            echo "Injecting NativeRtmpBridge into $PKG_NAME"
 
-            cat << 'EOF' > "$PKG_DIR/NativeRtmpBridge.java"
+            cat > "$PKG_DIR/NativeRtmpBridge.java" << 'EOF'
           package PACKAGE_PLACEHOLDER;
 
           import android.app.Activity;
@@ -215,16 +188,10 @@ jobs:
                           String cleanUrl = m3u8Url.replaceAll("[\"']", "").trim();
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
                           if (outArgs == null || outArgs.isEmpty()) return;
-
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
                           int gop = targetFps * 2;
-
-                          String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
-                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
-                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
-                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
-
+                          String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
                           FFmpegKit.executeAsync(cmd, session -> {});
                       } catch (Exception e) {
                           e.printStackTrace();
@@ -243,12 +210,7 @@ jobs:
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
                           int gop = targetFps * 2;
-
-                          String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
-                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
-                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
-                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
-
+                          String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
                           FFmpegKit.executeAsync(cmd, session -> {});
                           if (activePipePath != null) {
                               pipeOutputStream = new FileOutputStream(activePipePath);
@@ -288,53 +250,14 @@ jobs:
 
             sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
 
-            # === Safe registration of NativeRtmpBridge in MainActivity ===
+            # Simple registration (works for most Capacitor / WebView apps)
             if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
-              # Add import
               if [[ "$MAIN_FILE" == *.kt ]]; then
-                if ! grep -q "import android.webkit.WebView" "$MAIN_FILE"; then
-                  sed -i '/^package /a import android.webkit.WebView' "$MAIN_FILE"
-                fi
+                sed -i '/^package /a import android.webkit.WebView' "$MAIN_FILE"
+                sed -i '/super\.onCreate/a\        try { val wv = try { Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(Class.forName("com.getcapacitor.BridgeActivity").getMethod("getBridge").invoke(this)) as WebView } catch (e: Exception) { null }; if (wv != null) { wv.addJavascriptInterface(NativeRtmpBridge(this, wv), "NativeRtmpBridge"); android.util.Log.d("UMStudio", "NativeRtmpBridge registered") } } catch (e: Exception) { android.util.Log.e("UMStudio", "register failed", e) }' "$MAIN_FILE"
               else
-                if ! grep -q "import android.webkit.WebView;" "$MAIN_FILE"; then
-                  sed -i '/^package /a import android.webkit.WebView;' "$MAIN_FILE"
-                fi
-              fi
-
-              # Create a small helper file that will be injected
-              cat > /tmp/register_bridge.txt << 'REGISTER'
-        // === NativeRtmpBridge Registration (auto-injected) ===
-        try {
-            android.webkit.WebView targetWebView = null;
-            try {
-                Object bridge = Class.forName("com.getcapacitor.BridgeActivity").getMethod("getBridge").invoke(this);
-                targetWebView = (android.webkit.WebView) Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(bridge);
-            } catch (Exception ignored) {}
-            if (targetWebView == null) {
-                targetWebView = findViewById(android.R.id.content);
-            }
-            if (targetWebView != null) {
-                targetWebView.addJavascriptInterface(new NativeRtmpBridge(this, targetWebView), "NativeRtmpBridge");
-                android.util.Log.d("UMStudio", "NativeRtmpBridge registered successfully");
-            }
-        } catch (Exception e) {
-            android.util.Log.e("UMStudio", "Failed to register NativeRtmpBridge", e);
-        }
-        // === End NativeRtmpBridge Registration ===
-REGISTER
-
-              # Inject after super.onCreate
-              if grep -q "super.onCreate" "$MAIN_FILE"; then
-                # Use awk for safer multi-line insertion
-                awk '
-                  /super\.onCreate/ {
-                    print
-                    while ((getline line < "/tmp/register_bridge.txt") > 0) print line
-                    close("/tmp/register_bridge.txt")
-                    next
-                  }
-                  { print }
-                ' "$MAIN_FILE" > /tmp/MainActivity_new && mv /tmp/MainActivity_new "$MAIN_FILE"
+                sed -i '/^package /a import android.webkit.WebView;' "$MAIN_FILE"
+                sed -i '/super\.onCreate/a\        try { WebView wv = null; try { Object b = Class.forName("com.getcapacitor.BridgeActivity").getMethod("getBridge").invoke(this); wv = (WebView) Class.forName("com.getcapacitor.Bridge").getMethod("getWebView").invoke(b); } catch (Exception ignored) {} if (wv != null) { wv.addJavascriptInterface(new NativeRtmpBridge(this, wv), "NativeRtmpBridge"); android.util.Log.d("UMStudio", "NativeRtmpBridge registered"); } } catch (Exception e) { android.util.Log.e("UMStudio", "register failed", e); }' "$MAIN_FILE"
               fi
             fi
           fi
