@@ -48,6 +48,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
+import kotlin.math.roundToInt
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
@@ -62,22 +64,21 @@ import com.example.MainActivity
 import com.example.core.streaming.StreamSource
 import com.example.ui.MainViewModel
 import com.example.ui.components.*
+import com.example.ui.theme.Obsidian
+import com.example.ui.theme.CyberCyan
+import com.example.ui.theme.CrimsonRed
+import com.example.ui.theme.GlassDark
 import com.pedro.library.view.OpenGlView
 import java.io.File
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
-    val currentTab = uiState.currentTab
     val context = LocalContext.current
     var showExitDialog by remember { mutableStateOf(false) }
 
     androidx.activity.compose.BackHandler(enabled = true) {
-        if (currentTab != 0) {
-            viewModel.setCurrentTab(0)
-        } else {
-            showExitDialog = true
-        }
+        showExitDialog = true
     }
 
     if (showExitDialog) {
@@ -103,83 +104,10 @@ fun MainScreen(viewModel: MainViewModel) {
     }
 
     Scaffold(
-        containerColor = Color.Transparent,
-        bottomBar = {
-            NavigationBar(
-                containerColor = Color(0xFF0D111C),
-                contentColor = Color.White,
-                tonalElevation = 0.dp
-            ) {
-                NavigationBarItem(
-                    selected = currentTab == 0,
-                    onClick = { viewModel.setCurrentTab(0) },
-                    icon = { Icon(Icons.Default.Dvr, "Studio") },
-                    label = { Text("Studio") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color(0xFF38BDF8),
-                        selectedTextColor = Color(0xFF38BDF8),
-                        indicatorColor = Color(0x3338BDF8),
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 1,
-                    onClick = { viewModel.setCurrentTab(1) },
-                    icon = { Icon(Icons.Default.Dns, "M3U8 & Streams") },
-                    label = { Text("Streams", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color(0xFF10B981),
-                        selectedTextColor = Color(0xFF10B981),
-                        indicatorColor = Color(0x3310B981),
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 2,
-                    onClick = { viewModel.setCurrentTab(2) },
-                    icon = { Icon(Icons.Default.Share, "Destinations") },
-                    label = { Text("Destinations") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color(0xFF818CF8),
-                        selectedTextColor = Color(0xFF818CF8),
-                        indicatorColor = Color(0x33818CF8),
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 3,
-                    onClick = { viewModel.setCurrentTab(3) },
-                    icon = { Icon(Icons.Default.Settings, "Settings") },
-                    label = { Text("Settings") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color(0xFFA855F7),
-                        selectedTextColor = Color(0xFFA855F7),
-                        indicatorColor = Color(0x33A855F7),
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
-                    )
-                )
-            }
-        }
+        containerColor = Color.Transparent
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
-            when (currentTab) {
-                0 -> StudioPreviewScreen(
-                    viewModel = viewModel,
-                    onNavigateToM3u8 = { viewModel.setCurrentTab(1) },
-                    onNavigateToDestinations = { viewModel.setCurrentTab(2) },
-                    onNavigateToSettings = { viewModel.setCurrentTab(3) }
-                )
-                1 -> M3u8StreamsScreen(
-                    viewModel = viewModel,
-                    onNavigateToStudio = { viewModel.setCurrentTab(0) }
-                )
-                2 -> DestinationsScreen(viewModel)
-                3 -> AdvancedSettingsScreen(viewModel)
-            }
+            StudioPreviewScreen(viewModel = viewModel)
         }
     }
 }
@@ -187,20 +115,18 @@ fun MainScreen(viewModel: MainViewModel) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StudioPreviewScreen(
-    viewModel: MainViewModel,
-    onNavigateToM3u8: () -> Unit = {},
-    onNavigateToDestinations: () -> Unit,
-    onNavigateToSettings: () -> Unit
+    viewModel: MainViewModel
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     
-    var isOverlayVisible by remember { mutableStateOf(true) }
-    var showSourceSheet by remember { mutableStateOf(false) }
     var showM3u8Dialog by remember { mutableStateOf(false) }
     var showBackgroundSheet by remember { mutableStateOf(false) }
+    var showAudioMixer by remember { mutableStateOf(false) }
+    var showDestinationsSheet by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
+    var editingEndpoint by remember { mutableStateOf<com.example.core.model.PlatformEndpoint?>(null) }
     var isChatVisible by remember { mutableStateOf(true) }
-    val sheetState = rememberModalBottomSheetState()
     val bgSheetState = rememberModalBottomSheetState()
 
     val projectionManager = remember {
@@ -233,15 +159,12 @@ fun StudioPreviewScreen(
         }
     }
 
-    // 1. OpenGL Preview Area (Persistent)
     val openGlView = remember {
         OpenGlView(context).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setZOrderMediaOverlay(false)
-            setZOrderOnTop(false)
         }
     }
 
@@ -253,18 +176,12 @@ fun StudioPreviewScreen(
                         if (holder.surface?.isValid == true) {
                             viewModel.initPreview(openGlView)
                         }
-                    } catch (e: Exception) {
-                        // ignore surface errors
-                    }
+                    } catch (e: Exception) {}
                 }
             }
             override fun surfaceChanged(h: android.view.SurfaceHolder, f: Int, w: Int, h1: Int) {}
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
-                try {
-                    viewModel.stopPreview()
-                } catch (e: Exception) {
-                    // ignore
-                }
+                try { viewModel.stopPreview() } catch (e: Exception) {}
             }
         }
         openGlView.holder.addCallback(callback)
@@ -272,652 +189,396 @@ fun StudioPreviewScreen(
             try {
                 openGlView.holder.removeCallback(callback)
                 viewModel.stopPreview()
-            } catch (e: Exception) {
-                // ignore
-            }
+            } catch (e: Exception) {}
         }
     }
 
-    val bgConfig = uiState.bgConfig
-    val hasCustomImage = bgConfig.imageUri != null && bgConfig.displayMode != MainViewModel.ImageDisplayMode.OFF
-    val bgBitmap = remember(bgConfig.imageUri) {
-        bgConfig.imageUri?.let { path ->
-            val file = File(path)
-            if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+    val infiniteTransition = rememberInfiniteTransition(label = "borderGlow")
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Obsidian)
+            .statusBarsPadding()
+    ) {
+        val screenWidth = maxWidth
+        val screenHeight = maxHeight
+        
+        val targetRatio = 9f / 16f
+        val viewportWidth: Dp
+        val viewportHeight: Dp
+        
+        if (screenWidth / screenHeight > targetRatio) {
+            viewportHeight = screenHeight
+            viewportWidth = screenHeight * targetRatio
+        } else {
+            viewportWidth = screenWidth
+            viewportHeight = screenWidth * (1f / targetRatio)
         }
-    }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 1. INTERACTIVE BACKGROUND IMAGE LAYER (WITH DIRECT PINCH-TO-ZOOM & PAN GESTURES)
-        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode != MainViewModel.ImageDisplayMode.OFF) {
-            var bgScale by remember(bgConfig.zoom) { mutableFloatStateOf(bgConfig.zoom) }
-            var bgOffsetX by remember(bgConfig.offsetX) { mutableFloatStateOf(bgConfig.offsetX) }
-            var bgOffsetY by remember(bgConfig.offsetY) { mutableFloatStateOf(bgConfig.offsetY) }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(0f)
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            bgScale = (bgScale * zoom).coerceIn(0.5f, 4.0f)
-                            bgOffsetX = (bgOffsetX + pan.x * 0.15f).coerceIn(-100f, 100f)
-                            bgOffsetY = (bgOffsetY + pan.y * 0.15f).coerceIn(-100f, 100f)
-                            viewModel.updateBackgroundConfig(
-                                bgConfig.copy(zoom = bgScale, offsetX = bgOffsetX, offsetY = bgOffsetY)
-                            )
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    bitmap = bgBitmap.asImageBitmap(),
-                    contentDescription = "Interactive Studio Canvas Background",
-                    contentScale = when (bgConfig.scaleMode) {
-                        MainViewModel.BackgroundScaleMode.CONTAIN -> ContentScale.Fit
-                        MainViewModel.BackgroundScaleMode.COVER -> ContentScale.Crop
-                        MainViewModel.BackgroundScaleMode.TOP_BANNER -> ContentScale.FillWidth
-                        MainViewModel.BackgroundScaleMode.BOTTOM_BANNER -> ContentScale.FillWidth
-                        MainViewModel.BackgroundScaleMode.STRETCH -> ContentScale.FillBounds
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = bgScale
-                            scaleY = bgScale
-                            translationX = bgOffsetX * 5f
-                            translationY = bgOffsetY * 5f
-                            alpha = bgConfig.opacity.coerceIn(0.1f, 1f)
-                        }
+        val borderColor = if (uiState.isStreaming) CrimsonRed else CyberCyan
+        
+        // 1. Full-Bleed Edge-to-Edge Video Viewport
+        Box(
+            modifier = Modifier
+                .size(viewportWidth, viewportHeight)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(28.dp))
+                .background(Obsidian)
+                .border(
+                    width = 2.dp,
+                    brush = Brush.linearGradient(
+                        colors = listOf(borderColor, borderColor.copy(alpha = 0.3f), borderColor)
+                    ),
+                    shape = RoundedCornerShape(28.dp)
                 )
-            }
-        }
-
-        // 2. PiP OVERLAY MODE: Interactive background is full canvas, active feed (CAM, M3U8, or SCREEN) floats in PiP Window (zIndex 10f)
-        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 92.dp, end = 16.dp)
-                    .width(140.dp)
-                    .aspectRatio(uiState.streamConfig.aspectRatio.getRatio())
-                    .zIndex(10f)
-                    .shadow(16.dp, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(2.dp, Color(0xFF38BDF8)),
-                color = Color.Black
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    when (uiState.currentSource) {
-                        StreamSource.CAMERA -> {
-                            AndroidView(
-                                factory = { openGlView },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            Surface(
-                                modifier = Modifier.padding(4.dp).align(Alignment.TopStart),
-                                color = Color.Black.copy(alpha = 0.75f),
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    "LIVE CAM",
-                                    color = Color(0xFF38BDF8),
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Black,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        StreamSource.M3U8 -> {
-                            val m3u8Player = remember(uiState.m3u8Url) {
-                                viewModel.getRestreamEngine()?.getPlayer()
-                            }
-                            if (m3u8Player != null) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        PlayerView(ctx).apply {
-                                            player = m3u8Player
-                                            useController = false
-                                        }
-                                    },
-                                    update = { view ->
-                                        if (view.player != m3u8Player) {
-                                            view.player = m3u8Player
-                                        }
-                                    },
-                                    onRelease = { view ->
-                                        view.player = null
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                            Surface(
-                                modifier = Modifier.padding(4.dp).align(Alignment.TopStart),
-                                color = Color.Black.copy(alpha = 0.75f),
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    "LIVE M3U8",
-                                    color = Color(0xFF10B981),
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Black,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        StreamSource.SCREEN -> {
-                            ScreenCapturePreviewCard(
-                                isStreaming = uiState.isStreaming,
-                                isReady = viewModel.cachedMediaProjectionResult != null,
-                                onRequestCapture = launchScreenCapture,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. FULL SOURCE RENDERING (When PiP is not active and Background Image is not in FULL_IMAGE mode)
-        val isFullImageActive = hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE
-        val isPipActive = hasCustomImage && bgBitmap != null && bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY
-
-        if (!isFullImageActive && !isPipActive) {
-            when (uiState.currentSource) {
-                StreamSource.M3U8 -> {
-                    if (uiState.m3u8State != MainViewModel.M3u8PlaybackState.STOPPED || uiState.isStreaming) {
-                        val m3u8Player = remember(uiState.m3u8Url, uiState.isStreaming) {
-                            viewModel.getRestreamEngine()?.getPlayer()
-                        }
+        ) {
+            // Base Layer: Video Feed
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (uiState.currentSource) {
+                    StreamSource.CAMERA -> AndroidView(factory = { openGlView }, modifier = Modifier.fillMaxSize())
+                    StreamSource.M3U8 -> {
+                        val m3u8Player = remember(uiState.m3u8Url) { viewModel.getRestreamEngine()?.getPlayer() }
                         if (m3u8Player != null) {
                             AndroidView(
-                                factory = { ctx ->
-                                    PlayerView(ctx).apply {
+                                factory = { ctx -> 
+                                    PlayerView(ctx).apply { 
                                         player = m3u8Player
                                         useController = false
-                                    }
+                                    } 
                                 },
-                                update = { view ->
-                                    if (view.player != m3u8Player) {
-                                        view.player = m3u8Player
-                                    }
-                                },
-                                onRelease = { view ->
-                                    view.player = null
-                                },
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .zIndex(0f)
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
-                }
-                StreamSource.CAMERA -> {
-                    AndroidView(
-                        factory = { openGlView },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .zIndex(0f)
-                    )
-                }
-                StreamSource.SCREEN -> {
-                    ScreenCapturePreviewCard(
+                    StreamSource.SCREEN -> ScreenCapturePreviewCard(
                         isStreaming = uiState.isStreaming,
                         isReady = viewModel.cachedMediaProjectionResult != null,
                         onRequestCapture = launchScreenCapture,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .zIndex(0f)
+                        modifier = Modifier.fillMaxSize()
                     )
-                }
-            }
-        }
-
-        // FLOATING IMAGE MODE SWITCHER (Z-INDEX 60f)
-        if (hasCustomImage && bgBitmap != null && bgConfig.displayMode != MainViewModel.ImageDisplayMode.OFF) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 58.dp)
-                    .zIndex(60f),
-                color = Color(0xEE0D111C),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text("BG IMG:", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Surface(
-                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.PIP_OVERLAY) },
-                        color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) Color(0xFF38BDF8) else Color.Transparent,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(
-                            "PiP OVERLAY",
-                            color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.PIP_OVERLAY) Color.Black else Color.White,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    Surface(
-                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.FULL_IMAGE) },
-                        color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color(0xFF38BDF8) else Color.Transparent,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(
-                            "FULL BG",
-                            color = if (bgConfig.displayMode == MainViewModel.ImageDisplayMode.FULL_IMAGE) Color.Black else Color.White,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    Surface(
-                        onClick = {
-                            val newMode = if (bgConfig.scaleMode == MainViewModel.BackgroundScaleMode.COVER) {
-                                MainViewModel.BackgroundScaleMode.CONTAIN
-                            } else {
-                                MainViewModel.BackgroundScaleMode.COVER
-                            }
-                            viewModel.updateBackgroundConfig(bgConfig.copy(scaleMode = newMode))
-                        },
-                        color = Color(0x3338BDF8),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(
-                            if (bgConfig.scaleMode == MainViewModel.BackgroundScaleMode.CONTAIN) "FIT" else "CROP",
-                            color = Color(0xFF38BDF8),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = { viewModel.setImageDisplayMode(MainViewModel.ImageDisplayMode.OFF) },
-                        modifier = Modifier.size(20.dp)
-                    ) {
-                        Icon(Icons.Default.Close, "Hide image", tint = Color.Gray, modifier = Modifier.size(12.dp))
-                    }
-                }
-            }
-        }
-
-        // FLOATING STOP SCREEN SHARE BUTTON (Z-INDEX 60f)
-        if (uiState.currentSource == StreamSource.SCREEN) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 100.dp)
-                    .zIndex(60f),
-                color = Color(0xDDEF4444),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, Color(0xFFF87171)),
-                onClick = { viewModel.toggleSource(StreamSource.CAMERA) }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(Icons.Default.StopScreenShare, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                    Text("STOP SCREEN SHARE (BACK TO CAM)", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                }
-            }
-        }
-
-        // Top & Bottom Vignette (Z-INDEX 2f)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(140.dp)
-                .align(Alignment.TopCenter)
-                .zIndex(2f)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
-                    )
-                )
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-                .align(Alignment.BottomCenter)
-                .zIndex(2f)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
-                    )
-                )
-        )
-
-        // MAIN OVERLAY - ALWAYS ON TOP (Z-INDEX 50f)
-        if (!isOverlayVisible) {
-            Surface(
-                onClick = { isOverlayVisible = true },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 16.dp)
-                    .zIndex(70f),
-                color = Color(0xEE0D111C),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, Color(0xFF38BDF8))
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(Icons.Default.KeyboardArrowDown, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
-                    Text("SHOW CONTROLS", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                }
-            }
-        } else {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 6.dp)
-                .zIndex(50f)
-        ) {
-            // ROW 1: LIVE BADGE & SOURCE & DESTINATIONS BADGES (SCROLLABLE & COMPACT)
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    GlassPill(glowColor = if (uiState.isStreaming) Color(0xFFEF4444) else Color.Transparent) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    StreamSource.AUDIO -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize().background(Obsidian),
+                            contentAlignment = Alignment.Center
                         ) {
-                            val pulseAlpha by rememberInfiniteTransition().animateFloat(
-                                initialValue = 0.4f,
-                                targetValue = 1.0f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(600, easing = LinearEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "Pulse"
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (uiState.isStreaming) Color(0xFFEF4444).copy(alpha = pulseAlpha)
-                                        else Color.Gray
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                if (uiState.isStreaming) "LIVE (${formatTime(uiState.streamTime)})" else "READY",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Mic, null, tint = CyberCyan.copy(alpha = 0.5f), modifier = Modifier.size(64.dp))
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text("AUDIO ONLY MODE", color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                            }
                         }
                     }
-
-                    // Source Badge
-                    val sourceText = when (uiState.currentSource) {
-                        StreamSource.M3U8 -> "SRC: M3U8"
-                        StreamSource.CAMERA -> "SRC: CAM"
-                        StreamSource.SCREEN -> "SRC: SCREEN"
-                    }
-                    val sourceColor = when (uiState.currentSource) {
-                        StreamSource.M3U8 -> Color(0xFF10B981)
-                        StreamSource.CAMERA -> Color(0xFF38BDF8)
-                        StreamSource.SCREEN -> Color(0xFF818CF8)
-                    }
-                    Surface(
-                        color = sourceColor.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, sourceColor.copy(alpha = 0.6f))
-                    ) {
-                        Text(
-                            text = sourceText,
-                            color = sourceColor,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                        )
-                    }
-
-                    // Destinations Badge
-                    val enabledDestsCount = uiState.endpoints.count { it.isEnabled && it.streamKey.isNotBlank() }
-                    Surface(
-                        color = Color(0xFFA855F7).copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.6f)),
-                        onClick = { viewModel.setCurrentTab(2) }
-                    ) {
-                        Text(
-                            text = "DESTS: $enabledDestsCount",
-                            color = Color(0xFFA855F7),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Settings gear button
-                    IconButton(
-                        onClick = onNavigateToSettings,
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xBF1E2330))
-                    ) {
-                        Icon(Icons.Default.Settings, "Settings", tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(18.dp))
-                    }
-                    // Collapse / Hide overlay button with arrow
-                    IconButton(
-                        onClick = { isOverlayVisible = false },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xBF1E2330))
-                    ) {
-                        Icon(Icons.Default.KeyboardArrowUp, "Hide controls", tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
-                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // ROW 2: STATS PILLS
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatPill(Icons.Default.SignalCellularAlt, if (uiState.isStreaming) "Stable" else "Ready")
-                StatPill(Icons.Default.Speed, if (uiState.isStreaming) "${uiState.currentBitrate} kbps" else "0 kbps")
-                StatPill(Icons.Default.GraphicEq, if (uiState.isStreaming) "${uiState.fps} FPS" else "0 FPS")
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // ROW 3: REAL-TIME RTMP CONNECTION DIAGNOSTIC PILL
-            RtmpDiagnosticPill(
-                message = if (uiState.isStreaming || uiState.streamingStatus == com.example.core.streaming.StreamingStatus.CONNECTING || uiState.diagnosticIsError) {
-                    uiState.diagnosticMessage
-                } else {
-                    "RTMP: Ready to broadcast"
-                },
-                isError = uiState.diagnosticIsError,
-                isStreaming = uiState.isStreaming,
-                isConnecting = uiState.streamingStatus == com.example.core.streaming.StreamingStatus.CONNECTING,
-                onClick = {
-                    if (uiState.diagnosticIsError) {
-                        Toast.makeText(context, "RTMP Error: ${uiState.diagnosticMessage}. Check Stream Key in Destinations.", Toast.LENGTH_LONG).show()
-                        onNavigateToDestinations()
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // MIDDLE: AUDIO VU METER (LEFT) - REAL HARDWARE/AUDIO MONITOR
-            Box(modifier = Modifier.fillMaxWidth()) {
-                DualAudioVU(
-                    modifier = Modifier.align(Alignment.CenterStart),
-                    isStreaming = uiState.isStreaming,
-                    isMuted = !uiState.isMicEnabled,
-                    levelL = uiState.audioLevelL,
-                    levelR = uiState.audioLevelR
-                )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // PERSISTENT M3U8 & LIVE STREAM CONTROL DOCK (ALWAYS VISIBLE ABOVE ACTIONS)
-            M3u8ControlDock(
-                viewModel = viewModel,
-                uiState = uiState,
-                onOpenManager = onNavigateToM3u8,
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
-
-            // BOTTOM DECK: CHAT & ACTIONS
-            Row(
+            // Neon Pulse Overlay
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(245.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    .fillMaxSize()
+                    .border(
+                        BorderStroke(
+                            (3.dp * glowAlpha),
+                            Brush.sweepGradient(listOf(Color.Transparent, borderColor, Color.Transparent))
+                        ),
+                        RoundedCornerShape(28.dp)
+                    )
+            )
+
+            // 2. Floating Controls Overlays
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // LEFT: CHAT (45%)
-                if (isChatVisible) {
-                    GlassChat(viewModel = viewModel, modifier = Modifier.weight(0.45f))
-                } else {
-                    Spacer(modifier = Modifier.weight(0.01f))
+                // Top: Dynamic Island HUD
+                DynamicIslandHUD(
+                    isLive = uiState.isStreaming,
+                    streamTime = uiState.streamTime,
+                    bitrate = uiState.currentBitrate,
+                    fps = uiState.fps,
+                    endpoints = uiState.endpoints,
+                    onSettingsClick = { showSettingsSheet = true },
+                    onDestinationsClick = { showDestinationsSheet = true },
+                    onTelemetryClick = {
+                        Toast.makeText(context, uiState.diagnosticMessage, Toast.LENGTH_SHORT).show()
+                    }
+                )
+
+                // Middle: Chat (Redesigned Overlay)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    if (isChatVisible) {
+                        GlassChatOverlay(messages = uiState.chatMessages)
+                    }
                 }
 
-                // RIGHT: ACTION DECK (55%)
-                Column(
-                    modifier = Modifier.weight(0.55f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // GO LIVE CAPSULE (VALIDATES DESTINATIONS)
-                    GoLiveButton(
-                        isStreaming = uiState.isStreaming,
-                        onClick = {
-                            if (uiState.isStreaming) {
-                                viewModel.stopStream()
+                // Bottom: Action Dock
+                SourceSelectorPill(
+                    currentSource = uiState.currentSource,
+                    onSelect = { source ->
+                        viewModel.toggleSource(source)
+                        if (source == StreamSource.M3U8) {
+                            showM3u8Dialog = true
+                        }
+                        if (source == StreamSource.SCREEN && viewModel.cachedMediaProjectionResult == null) {
+                            launchScreenCapture()
+                        }
+                    }
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+
+                CurvedControlDock(
+                    isLive = uiState.isStreaming,
+                    isMicOn = uiState.isMicEnabled,
+                    isChatActive = isChatVisible,
+                    onGoLive = {
+                        if (uiState.isStreaming) {
+                            viewModel.stopStream()
+                        } else {
+                            if (!viewModel.hasValidDestination()) {
+                                Toast.makeText(context, "Configure destinations first!", Toast.LENGTH_SHORT).show()
+                                showDestinationsSheet = true
                             } else {
-                                if (!viewModel.hasValidDestination()) {
-                                    Toast.makeText(
-                                        context,
-                                        "Please configure at least one Destination Stream Key to go live!",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                    onNavigateToDestinations()
+                                if (uiState.currentSource == StreamSource.SCREEN && viewModel.cachedMediaProjectionResult == null) {
+                                    launchScreenCapture()
                                 } else {
-                                    if (uiState.currentSource == StreamSource.SCREEN) {
-                                        if (viewModel.cachedMediaProjectionResult != null) {
-                                            viewModel.startStream(context, viewModel.cachedMediaProjectionResult)
-                                        } else {
-                                            launchScreenCapture()
-                                        }
-                                    } else {
-                                        viewModel.startStream(context)
-                                    }
+                                    viewModel.startStream(context, viewModel.cachedMediaProjectionResult)
                                 }
                             }
                         }
-                    )
+                    },
+                    onToggleMic = { viewModel.toggleMic(!uiState.isMicEnabled) },
+                    onOpenMixer = { showAudioMixer = true },
+                    onOpenBackground = { showBackgroundSheet = true },
+                    onToggleChat = { isChatVisible = !isChatVisible }
+                )
+            }
 
-                    // ACTION GRID 2x3
-                    ActionGrid(
-                        isMicEnabled = uiState.isMicEnabled,
-                        onMicToggle = { viewModel.toggleMic(!uiState.isMicEnabled) },
-                        onFlip = { viewModel.switchCamera() },
-                        onSource = { showSourceSheet = true },
-                        isFlashOn = uiState.isFlashOn,
-                        onFlash = { viewModel.toggleFlash(context) },
-                        onChat = { isChatVisible = !isChatVisible },
-                        onBg = { showBackgroundSheet = true }
-                    )
+            // Draggable Facecam PiP Overlay
+            if (uiState.isFacecamEnabled && uiState.currentSource != StreamSource.CAMERA) {
+                DraggableFacecam(
+                    initialX = uiState.facecamX,
+                    initialY = uiState.facecamY,
+                    onPositionChange = { x, y -> viewModel.updateFacecamPosition(x, y) }
+                ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Face, null, tint = CyberCyan, modifier = Modifier.size(40.dp))
+                    }
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
-    }
 
-    // Background Studio Sheet
+    // Modal Components
     if (showBackgroundSheet) {
         ModalBottomSheet(
             onDismissRequest = { showBackgroundSheet = false },
             sheetState = bgSheetState,
-            containerColor = Color(0xFF0F1422)
+            containerColor = Obsidian
         ) {
-            BackgroundStudioSheet(
-                viewModel = viewModel,
-                onDismiss = { showBackgroundSheet = false }
+            BackgroundStudioSheet(viewModel = viewModel, onDismiss = { showBackgroundSheet = false })
+        }
+    }
+
+    if (showAudioMixer) {
+        ModalBottomSheet(
+            onDismissRequest = { showAudioMixer = false },
+            containerColor = Obsidian
+        ) {
+            AudioMixerSheet(
+                micVolume = uiState.micVolume,
+                onMicVolumeChange = { viewModel.setMicVolume(it) },
+                m3u8Volume = uiState.m3u8Volume,
+                onM3u8VolumeChange = { viewModel.setM3u8Volume(it) },
+                onDismiss = { showAudioMixer = false }
             )
         }
     }
 
-    // Input Source Sheet
-    if (showSourceSheet) {
+    if (showM3u8Dialog) {
         ModalBottomSheet(
-            onDismissRequest = { showSourceSheet = false },
-            sheetState = sheetState,
-            containerColor = Color(0xFF0F1422)
+            onDismissRequest = { showM3u8Dialog = false },
+            containerColor = Obsidian
         ) {
-            Column(modifier = Modifier.padding(16.dp).padding(bottom = 32.dp)) {
-                Text("INPUT SOURCE", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color.White)
-                Spacer(modifier = Modifier.height(16.dp))
-                SourceOptionItem("CAMERA", "Direct broadcast camera", Icons.Default.CameraAlt, uiState.currentSource == StreamSource.CAMERA) { 
-                    viewModel.toggleSource(StreamSource.CAMERA)
-                    showSourceSheet = false 
-                }
-                SourceOptionItem("SCREEN", "Capture device display", Icons.Default.ScreenShare, uiState.currentSource == StreamSource.SCREEN) { 
-                    viewModel.toggleSource(StreamSource.SCREEN)
-                    showSourceSheet = false 
-                    if (viewModel.cachedMediaProjectionResult == null) {
-                        launchScreenCapture()
-                    }
-                }
-                SourceOptionItem("REMOTE URL", "Restream M3U8/HLS stream", Icons.Default.Link, uiState.currentSource == StreamSource.M3U8) { 
-                    viewModel.toggleSource(StreamSource.M3U8)
-                    showSourceSheet = false
-                    showM3u8Dialog = true 
-                }
-            }
+            M3u8GlassSheet(
+                url = uiState.m3u8Url,
+                onUrlChange = { viewModel.setM3u8Url(it) },
+                savedStreams = uiState.savedStreams,
+                onSelectStream = { stream ->
+                    viewModel.setM3u8Url(stream.url)
+                    viewModel.setM3u8Name(stream.name)
+                },
+                onSaveStream = { url -> viewModel.saveStream("Stream ${uiState.savedStreams.size + 1}", url) },
+                onDismiss = { showM3u8Dialog = false }
+            )
         }
     }
 
-    // Advanced M3U8 Stream Manager Dialog
-    if (showM3u8Dialog) {
-        M3u8StreamManagerDialog(
-            viewModel = viewModel,
-            onDismiss = { showM3u8Dialog = false }
-        )
+    if (showDestinationsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showDestinationsSheet = false },
+            containerColor = Obsidian
+        ) {
+            DestinationsGlassSheet(
+                endpoints = uiState.endpoints,
+                onToggle = { id, enabled -> viewModel.toggleDestination(context, id, enabled) },
+                onEdit = { editingEndpoint = it },
+                onAddCustom = { 
+                    val newEp = viewModel.addCustomDestination(context, "", "", "")
+                    editingEndpoint = newEp
+                },
+                onDismiss = { showDestinationsSheet = false }
+            )
+        }
     }
 
-    // High-Priority Screen Capture Activation Modal
+    if (editingEndpoint != null) {
+        ModalBottomSheet(
+            onDismissRequest = { editingEndpoint = null },
+            containerColor = Obsidian
+        ) {
+            DestinationEditGlassSheet(
+                endpoint = editingEndpoint!!,
+                onSave = { updated ->
+                    viewModel.saveDestination(context, updated)
+                    editingEndpoint = null
+                },
+                onDelete = { id ->
+                    viewModel.deleteCustomDestination(context, id)
+                    editingEndpoint = null
+                },
+                onDismiss = { editingEndpoint = null }
+            )
+        }
+    }
+
+    if (showSettingsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettingsSheet = false },
+            containerColor = Obsidian
+        ) {
+            SettingsGlassSheet(
+                config = uiState.streamConfig,
+                onConfigChange = { viewModel.updateConfig(it) },
+                isWatermarkEnabled = uiState.isWatermarkEnabled,
+                onWatermarkToggle = { viewModel.toggleWatermark(it, context) },
+                isTickerEnabled = uiState.isTickerEnabled,
+                onTickerToggle = { viewModel.toggleTicker(it) },
+                onVersionClick = { viewModel.onVersionClick() },
+                onDismiss = { showSettingsSheet = false }
+            )
+        }
+    }
+
     if (uiState.showScreenCapturePrompt) {
         ScreenCapturePromptDialog(
             viewModel = viewModel,
-            onStartScreenCapture = {
-                launchScreenCapture()
-            },
+            onStartScreenCapture = { launchScreenCapture() },
             onDismiss = { viewModel.dismissScreenCapturePrompt() }
         )
+    }
+}
+
+@Composable
+fun DestinationEditGlassSheet(
+    endpoint: com.example.core.model.PlatformEndpoint,
+    onSave: (com.example.core.model.PlatformEndpoint) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf(endpoint.name) }
+    var url by remember { mutableStateOf(endpoint.url) }
+    var key by remember { mutableStateOf(endpoint.streamKey) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .padding(bottom = 32.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(
+            "EDIT ${endpoint.name.uppercase()}",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.padding(bottom = 24.dp)
+        )
+
+        GlassTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = "FRIENDLY NAME",
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        GlassTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = "RTMP SERVER URL",
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        GlassTextField(
+            value = key,
+            onValueChange = { key = it },
+            label = "STREAM KEY",
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (endpoint is com.example.core.model.PlatformEndpoint.CustomRTMP) {
+                OutlinedButton(
+                    onClick = { onDelete(endpoint.id) },
+                    modifier = Modifier.weight(1f),
+                    border = BorderStroke(1.dp, CrimsonRed.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("DELETE", color = CrimsonRed, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Button(
+                onClick = {
+                    val updated = when (endpoint) {
+                        is com.example.core.model.PlatformEndpoint.YouTube -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.Facebook -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.TikTok -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.Twitch -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.Twitter -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.Instagram -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.Kick -> endpoint.copy(name = name, url = url, streamKey = key)
+                        is com.example.core.model.PlatformEndpoint.CustomRTMP -> endpoint.copy(name = name, url = url, streamKey = key)
+                    }
+                    onSave(updated)
+                },
+                modifier = Modifier.weight(if (endpoint is com.example.core.model.PlatformEndpoint.CustomRTMP) 1.5f else 1f),
+                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("SAVE DESTINATION", color = Color.Black, fontWeight = FontWeight.Black)
+            }
+        }
     }
 }
 
@@ -937,23 +598,6 @@ fun GlassPill(
     }
 }
 
-@Composable
-fun StatPill(icon: ImageVector, text: String) {
-    Surface(
-        color = Color(0xBF1E2330),
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-        ) {
-            Icon(icon, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(12.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
 
 @Composable
 fun RtmpDiagnosticPill(
@@ -1106,164 +750,6 @@ fun VuBar(level: Float) {
                         RoundedCornerShape(2.dp)
                     )
             )
-        }
-    }
-}
-
-@Composable
-fun GlassChat(viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    val uiState by viewModel.uiState.collectAsState()
-    val chatMessages = uiState.chatMessages
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    var inputMessage by remember { mutableStateOf("") }
-
-    androidx.compose.runtime.LaunchedEffect(chatMessages.size) {
-        if (chatMessages.isNotEmpty()) {
-            listState.animateScrollToItem(chatMessages.size - 1)
-        }
-    }
-
-    Surface(
-        modifier = modifier.fillMaxHeight(),
-        color = Color(0xBF1E2330),
-        shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("LIVE CHAT (${chatMessages.size})", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                if (uiState.isStreaming) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF10B981))
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                if (chatMessages.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            if (uiState.isStreaming) "Listening for real comments from YouTube / Active platforms..." else "Go Live to receive real-time comments...",
-                            color = Color.White.copy(alpha = 0.3f),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                } else {
-                    androidx.compose.foundation.lazy.LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(chatMessages, key = { it.id }) { msg ->
-                            val platformColor = when (msg.platform.uppercase()) {
-                                "YOUTUBE" -> Color(0xFFEF4444)
-                                "FACEBOOK" -> Color(0xFF3B82F6)
-                                "TWITCH" -> Color(0xFF8B5CF6)
-                                "TIKTOK" -> Color(0xFFEC4899)
-                                "KICK" -> Color(0xFF10B981)
-                                else -> Color(0xFF38BDF8)
-                            }
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0x33000000), RoundedCornerShape(8.dp))
-                                    .padding(8.dp)
-                            ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Surface(
-                                        color = platformColor.copy(alpha = 0.2f),
-                                        shape = RoundedCornerShape(4.dp),
-                                        border = BorderStroke(1.dp, platformColor.copy(alpha = 0.6f))
-                                    ) {
-                                        Text(
-                                            text = msg.platform.uppercase(),
-                                            color = platformColor,
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.Black,
-                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                    Text(
-                                        text = msg.author,
-                                        color = Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = msg.message,
-                                    color = Color.White.copy(alpha = 0.9f),
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Real comment input / test sender
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                OutlinedTextField(
-                    value = inputMessage,
-                    onValueChange = { inputMessage = it },
-                    placeholder = { Text("Add real/incoming comment...", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(42.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 11.sp),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF38BDF8),
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.15f),
-                        focusedContainerColor = Color(0x33000000),
-                        unfocusedContainerColor = Color(0x33000000)
-                    ),
-                    shape = RoundedCornerShape(10.dp)
-                )
-                IconButton(
-                    onClick = {
-                        if (inputMessage.isNotBlank()) {
-                            val activeEndpoints = uiState.endpoints.filter { it.isEnabled && it.streamKey.isNotBlank() }
-                            val platform = activeEndpoints.firstOrNull()?.name ?: "YouTube"
-                            viewModel.addIncomingChatMessage(platform = platform, author = "Live Viewer", message = inputMessage.trim())
-                            inputMessage = ""
-                        }
-                    },
-                    modifier = Modifier
-                        .size(38.dp)
-                        .background(Color(0xFF38BDF8), RoundedCornerShape(10.dp))
-                ) {
-                    Icon(Icons.Default.Send, "Send", tint = Color.Black, modifier = Modifier.size(16.dp))
-                }
-            }
         }
     }
 }

@@ -37,7 +37,8 @@ enum class StreamingStatus {
 enum class StreamSource {
     CAMERA,
     SCREEN,
-    M3U8
+    M3U8,
+    AUDIO
 }
 
 class StreamEngineManager(
@@ -264,6 +265,10 @@ class StreamEngineManager(
                 stopDisplayStream()
                 startPreview()
             }
+            StreamSource.AUDIO -> {
+                stopCameraHardware()
+                stopDisplayStream()
+            }
         }
     }
 
@@ -331,7 +336,7 @@ class StreamEngineManager(
         val (width, height) = calculateResolution(quality, aspect)
         val safeBitrate = quality.defaultBitrate.coerceIn(1_500_000, 4_500_000)
         
-        val videoPrepared = if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
+        val videoPrepared = if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
             rtmpCamera2?.setVideoCodec(codec)
             rtmpCamera2?.prepareVideo(width, height, quality.fps, safeBitrate, 2) ?: false
         } else {
@@ -339,7 +344,7 @@ class StreamEngineManager(
             rtmpDisplay?.prepareVideo(width, height, quality.fps, safeBitrate, 2, context.resources.configuration.densityDpi) ?: false
         }
 
-        val audioPrepared = if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
+        val audioPrepared = if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
             rtmpCamera2?.prepareAudio(128 * 1024, 44100, true, false, false) ?: false
         } else {
             rtmpDisplay?.prepareAudio(128 * 1024, 44100, true, false, false) ?: false
@@ -348,7 +353,7 @@ class StreamEngineManager(
         if (videoPrepared && audioPrepared) {
             bitrateAdapter = BitrateAdapter { bitrate ->
                 val targetBitrate = bitrate.toInt().coerceIn(1_500_000, 4_500_000)
-                if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
+                if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
                     rtmpCamera2?.setVideoBitrateOnFly(targetBitrate)
                 } else {
                     rtmpDisplay?.setVideoBitrateOnFly(targetBitrate)
@@ -380,7 +385,13 @@ class StreamEngineManager(
                 if (rtmpCamera2?.isStreaming == false) {
                     rtmpCamera2?.startStream(url)
                 }
-            } else if (currentSource == StreamSource.M3U8) {
+            } else if (currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
+                if (currentSource == StreamSource.AUDIO) {
+                    prepareStream(currentConfig)
+                    if (rtmpCamera2?.isStreaming == false) {
+                        rtmpCamera2?.startStream(url)
+                    }
+                }
                 _status.value = StreamingStatus.STREAMING
             } else {
                 mediaProjectionResult?.let {
@@ -401,7 +412,7 @@ class StreamEngineManager(
 
     fun stopStream() {
         if (isReleased) return
-        if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
+        if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
             rtmpCamera2?.stopStream()
         } else {
             rtmpDisplay?.stopStream()

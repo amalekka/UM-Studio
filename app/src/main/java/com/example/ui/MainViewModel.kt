@@ -106,6 +106,7 @@ class MainViewModel : ViewModel() {
             SavedStreamItem(name = "Big Buck Bunny HLS", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
         ),
         val isMicEnabled: Boolean = true,
+        val micVolume: Float = 1.0f,
         val isCameraEnabled: Boolean = true,
         val isWatermarkEnabled: Boolean = false,
         val isTickerEnabled: Boolean = false,
@@ -119,9 +120,11 @@ class MainViewModel : ViewModel() {
         val isFrontCamera: Boolean = false,
         val bgConfig: BackgroundConfig = BackgroundConfig(),
         val isChatVisible: Boolean = true,
-        val currentTab: Int = 0,
         val preferM3u8StreamCopy: Boolean = true,
         val isScreenCaptureReady: Boolean = false,
+        val isFacecamEnabled: Boolean = false,
+        val facecamX: Float = 20f,
+        val facecamY: Float = 160f,
         val chatMessages: List<ChatMessage> = emptyList()
     )
 
@@ -581,20 +584,24 @@ class MainViewModel : ViewModel() {
                                     diagnosticMessage = "Native Bridge Not Initialized",
                                     diagnosticIsError = true
                                 )
-                                Toast.makeText(context, "Native streaming bridge not initialized or running in browser mode", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Native streaming bridge not initialized", Toast.LENGTH_LONG).show()
                             }
                             return@launch
                         }
-                        val cleanUrl = state.m3u8Url.trim().removeSurrounding("\"").removeSurrounding("'")
-                        if (cleanUrl.isBlank() || !cleanUrl.startsWith("http")) {
+
+                        // SANITIZE AND VALIDATE URL
+                        val rawUrl = state.m3u8Url
+                        val cleanUrl = rawUrl.trim().replace("\"", "").replace("'", "")
+                        
+                        if (cleanUrl.isBlank() || !(cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://") || cleanUrl.startsWith("rtmp"))) {
                             withContext(Dispatchers.Main) {
                                 _uiState.value = _uiState.value.copy(
                                     isStreaming = false,
                                     streamingStatus = StreamingStatus.IDLE,
-                                    diagnosticMessage = "Invalid Remote M3U8 URL",
+                                    diagnosticMessage = "Invalid Remote URL",
                                     diagnosticIsError = true
                                 )
-                                Toast.makeText(context, "Please enter a valid remote M3U8 URL first in Streams tab", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Please enter a valid HTTP/HTTPS/RTMP source URL", Toast.LENGTH_LONG).show()
                             }
                             return@launch
                         }
@@ -635,7 +642,7 @@ class MainViewModel : ViewModel() {
                                 val copyModeText = if (canStreamCopy) " (Ultra-Fast Copy)" else ""
                                 Toast.makeText(context, "Broadcasting M3U8 stream to ${primary.name}$copyModeText...", Toast.LENGTH_SHORT).show()
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             Log.e("MainViewModel", "Error in M3U8 restream execution: ${e.message}", e)
                             withContext(Dispatchers.Main) {
                                 _uiState.value = _uiState.value.copy(
@@ -738,17 +745,59 @@ class MainViewModel : ViewModel() {
                             }
                         }
                     }
+                    StreamSource.AUDIO -> {
+                        service?.getStreamManager()?.let { manager ->
+                            val prepared = manager.prepareStream(config)
+                            if (prepared) {
+                                manager.startStream(primaryUrl)
+                                if (validEndpoints.size > 1) {
+                                    service?.getProManager()?.let { pro ->
+                                        validEndpoints.drop(1).forEachIndexed { index, extra ->
+                                            val extraUrl = allUrls[index + 1]
+                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl))
+                                        }
+                                        pro.startMultiStreaming()
+                                    }
+                                }
+                                withContext(Dispatchers.Main) {
+                                    _uiState.value = _uiState.value.copy(
+                                        isStreaming = true,
+                                        streamingStatus = StreamingStatus.STREAMING
+                                    )
+                                    startTimer()
+                                    Toast.makeText(context, "Broadcasting Audio-Only to ${primary.name}...", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    _uiState.value = _uiState.value.copy(
+                                        isStreaming = false,
+                                        streamingStatus = StreamingStatus.IDLE,
+                                        diagnosticMessage = "Audio Prepare Failed",
+                                        diagnosticIsError = true
+                                    )
+                                    Toast.makeText(context, "Failed to initialize audio encoder.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Error in startStream on Dispatchers.IO: ${e.message}", e)
+            } catch (e: Throwable) {
+                Log.e("MainViewModel", "Fatal error in startStream: ${e.message}", e)
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(
                         isStreaming = false,
                         streamingStatus = StreamingStatus.ERROR,
-                        diagnosticMessage = "Failed: ${e.message ?: "Unknown"}",
+                        diagnosticMessage = "Fatal Error: ${e.javaClass.simpleName}",
                         diagnosticIsError = true
                     )
-                    Toast.makeText(context, "Streaming error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "System Error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                // LOCK STATS TO ZERO IF IDLE
+                if (!_uiState.value.isStreaming) {
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(currentBitrate = 0, fps = 0)
+                    }
                 }
             }
         }
@@ -867,6 +916,22 @@ class MainViewModel : ViewModel() {
                     )
                     service?.getStreamManager()?.setSource(StreamSource.SCREEN)
                 }
+                StreamSource.AUDIO -> {
+                    // Strict mutual exclusion: release Camera hardware & preview, stop ExoPlayer M3U8, stop Screen Capture
+                    service?.getStreamManager()?.stopPreview()
+                    service?.getStreamManager()?.stopCameraHardware()
+                    service?.getStreamManager()?.stopDisplayStream()
+                    stopM3u8Stream()
+                    cachedMediaProjectionResult = null
+
+                    _uiState.value = _uiState.value.copy(
+                        currentSource = StreamSource.AUDIO,
+                        showScreenCapturePrompt = false,
+                        isScreenCaptureReady = false,
+                        m3u8State = M3u8PlaybackState.STOPPED
+                    )
+                    service?.getStreamManager()?.setSource(StreamSource.AUDIO)
+                }
             }
         }
     }
@@ -959,11 +1024,14 @@ class MainViewModel : ViewModel() {
         if (stream.userAgent.isNotBlank()) headers["User-Agent"] = stream.userAgent
         if (stream.referer.isNotBlank()) headers["Referer"] = stream.referer
         playM3u8(url = stream.url, name = stream.name, headers = headers)
-        setCurrentTab(0)
     }
 
-    fun setCurrentTab(tab: Int) {
-        _uiState.value = _uiState.value.copy(currentTab = tab)
+    fun setM3u8Url(url: String) {
+        _uiState.value = _uiState.value.copy(m3u8Url = url)
+    }
+
+    fun setM3u8Name(name: String) {
+        _uiState.value = _uiState.value.copy(activeM3u8Name = name)
     }
 
     fun getRestreamEngine(): com.example.core.streaming.M3u8RestreamEngine? = service?.getRestreamEngine()
@@ -1026,6 +1094,27 @@ class MainViewModel : ViewModel() {
             service?.getStreamManager()?.muteAudio()
             _uiState.value = _uiState.value.copy(audioLevelL = 0f, audioLevelR = 0f)
         }
+    }
+
+    fun setMicVolume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        _uiState.value = _uiState.value.copy(
+            micVolume = clamped,
+            isMicEnabled = clamped > 0.01f
+        )
+        if (clamped > 0.01f) {
+            service?.getStreamManager()?.unmuteAudio()
+        } else {
+            service?.getStreamManager()?.muteAudio()
+        }
+    }
+
+    fun setFacecamEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isFacecamEnabled = enabled)
+    }
+
+    fun updateFacecamPosition(x: Float, y: Float) {
+        _uiState.value = _uiState.value.copy(facecamX = x, facecamY = y)
     }
 
     fun toggleFlash(context: Context) {
