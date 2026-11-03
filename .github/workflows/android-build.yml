@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: \( {{ github.workflow }}- \){{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,15 +43,19 @@ jobs:
       - name: Prepare Keystore, Permissions & Inject Native RTMP Engine
         run: |
           set -e
-
+          # 1. Create .env file
           touch .env
-          if [ -f ".env.example" ]; then cp .env.example .env; fi
+          if [ -f ".env.example" ]; then
+            cp .env.example .env
+          fi
 
+          # 2. Extract passwords safely
           SP="${{ secrets.STORE_PASSWORD }}"
           if [ -z "$SP" ]; then SP="android"; fi
           KP="${{ secrets.KEY_PASSWORD }}"
           if [ -z "$KP" ]; then KP="android"; fi
 
+          # 3. Validate or Generate Release Keystore
           if [ -f "my-upload-key.jks" ]; then
             if ! keytool -list -keystore my-upload-key.jks -storepass "$SP" >/dev/null 2>&1; then
               rm -f my-upload-key.jks app/my-upload-key.jks
@@ -59,7 +63,15 @@ jobs:
           fi
 
           if [ ! -f "my-upload-key.jks" ]; then
-            keytool -genkey -v -keystore my-upload-key.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass "$SP" -keypass "$KP" -dname "CN=UM Studio,O=AIStudio,C=US"
+            keytool -genkey -v \
+              -keystore my-upload-key.jks \
+              -alias upload \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$SP" \
+              -keypass "$KP" \
+              -dname "CN=UM Studio,O=AIStudio,C=US"
           fi
 
           cp -f my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
@@ -68,6 +80,7 @@ jobs:
           echo "STORE_PASSWORD=${SP}" >> $GITHUB_ENV
           echo "KEY_PASSWORD=${KP}" >> $GITHUB_ENV
 
+          # 4. Sync Web UI if package.json exists
           if [ -f "package.json" ]; then
             npm install --legacy-peer-deps || true
             npm run build || true
@@ -79,9 +92,20 @@ jobs:
             npx cap sync android 2>/dev/null || true
           fi
 
+          # 5. Inject Android Permissions & usesCleartextTraffic
           for MANIFEST in "app/src/main/AndroidManifest.xml" "android/app/src/main/AndroidManifest.xml"; do
             if [ -f "$MANIFEST" ]; then
-              for PERM in "android.permission.INTERNET" "android.permission.CAMERA" "android.permission.RECORD_AUDIO" "android.permission.MODIFY_AUDIO_SETTINGS" "android.permission.WAKE_LOCK" "android.permission.FOREGROUND_SERVICE" "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"; do
+              REQUIRED_PERMISSIONS=(
+                "android.permission.INTERNET"
+                "android.permission.CAMERA"
+                "android.permission.RECORD_AUDIO"
+                "android.permission.MODIFY_AUDIO_SETTINGS"
+                "android.permission.WAKE_LOCK"
+                "android.permission.FOREGROUND_SERVICE"
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+              )
+              for PERM in "${REQUIRED_PERMISSIONS[@]}"; do
                 if ! grep -q "$PERM" "$MANIFEST"; then
                   sed -i "/<application/i \    <uses-permission android:name=\"$PERM\" />" "$MANIFEST"
                 fi
@@ -92,6 +116,7 @@ jobs:
             fi
           done
 
+          # 6. Inject ffmpeg-kit-https-gpl dependency (Supports HTTPS and RTMPS securely)
           for GRADLE_FILE in "app/build.gradle" "app/build.gradle.kts" "android/app/build.gradle" "android/app/build.gradle.kts"; do
             if [ -f "$GRADLE_FILE" ]; then
               sed -i 's/minSdk = [0-9]*/minSdk = 24/g; s/minSdkVersion [0-9]*/minSdkVersion 24/g' "$GRADLE_FILE"
@@ -106,14 +131,14 @@ jobs:
             fi
           done
 
-          # Generate NativeRtmpBridge only (NO automatic registration - this was causing the crash)
+          # 7. Generate NativeRtmpBridge.java + Safe Bridge Registration in MainActivity
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
             PKG_NAME=$(grep "^package " "$MAIN_FILE" | head -n 1 | sed 's/package //;s/;//' | tr -d '\r\n ')
-            echo "Injecting NativeRtmpBridge.java into package $PKG_NAME"
+            echo "Injecting NativeRtmpBridge.java into package $PKG_NAME at $PKG_DIR..."
 
-            cat > "$PKG_DIR/NativeRtmpBridge.java" << 'EOF'
+            cat << 'EOF' > "$PKG_DIR/NativeRtmpBridge.java"
           package PACKAGE_PLACEHOLDER;
 
           import android.app.Activity;
@@ -124,6 +149,7 @@ jobs:
           import com.arthenica.ffmpegkit.FFmpegKitConfig;
           import com.arthenica.ffmpegkit.Statistics;
           import org.json.JSONArray;
+          import java.io.File;
           import java.io.FileOutputStream;
 
           public class NativeRtmpBridge {
@@ -141,6 +167,7 @@ jobs:
                               int rawKbps = (int) (stats.getBitrate() / 1000.0);
                               final int kbps = (rawKbps > 100 && rawKbps < 8000) ? rawKbps : 4200;
                               final int fps = Math.min(60, Math.max(24, (int) stats.getVideoFps()));
+
                               if (activity != null) {
                                   activity.runOnUiThread(() -> {
                                       try {
@@ -187,12 +214,21 @@ jobs:
                           stopStream();
                           if (m3u8Url == null || m3u8Url.isEmpty()) return;
                           String cleanUrl = m3u8Url.replaceAll("[\"']", "").trim();
+
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
                           if (outArgs == null || outArgs.isEmpty()) return;
+
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
                           int gop = targetFps * 2;
-                          String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                          int w = width > 0 ? width : 1280;
+                          int h = height > 0 ? height : 720;
+
+                          String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
+                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
+                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+
                           FFmpegKit.executeAsync(cmd, session -> {});
                       } catch (Exception e) {
                           e.printStackTrace();
@@ -211,12 +247,18 @@ jobs:
                           int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
                           int targetFps = fps > 0 ? fps : 30;
                           int gop = targetFps * 2;
-                          String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+
+                          String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
+                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
+                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+
                           FFmpegKit.executeAsync(cmd, session -> {});
                           if (activePipePath != null) {
                               pipeOutputStream = new FileOutputStream(activePipePath);
                           }
-                      } catch (Exception e) {}
+                      } catch (Exception e) {
+                      }
                   }).start();
               }
 
@@ -248,21 +290,48 @@ jobs:
               }
           }
           EOF
-
             sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
-            echo "NativeRtmpBridge generated successfully (no auto-registration)"
+
+            # === SAFE & STABLE: Register the bridge inside MainActivity safely ===
+            if [[ "$MAIN_FILE" == *.kt ]]; then
+              if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
+                if grep -q "super.onCreate" "$MAIN_FILE"; then
+                  sed -i '/super\.onCreate/a\
+          try {\
+              val bridge = (this as? com.getcapacitor.BridgeActivity)?.bridge\
+              if (bridge?.webView != null) {\
+                  bridge.webView.addJavascriptInterface(NativeRtmpBridge(this, bridge.webView), "NativeRtmpBridge")\
+                  android.util.Log.d("UMStudio", "NativeRtmpBridge registered via Capacitor bridge")\
+              }\
+          } catch (e: Exception) {\
+              android.util.Log.e("UMStudio", "Bridge registration failed", e)\
+          }' "$MAIN_FILE"
+                fi
+              fi
+            else
+              if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
+                if grep -q "super.onCreate" "$MAIN_FILE"; then
+                  sed -i '/super\.onCreate/a\
+              try {\
+                  com.getcapacitor.Bridge bridge = getBridge();\
+                  if (bridge != null && bridge.getWebView() != null) {\
+                      bridge.getWebView().addJavascriptInterface(new NativeRtmpBridge(this, bridge.getWebView()), "NativeRtmpBridge");\
+                      android.util.Log.d("UMStudio", "NativeRtmpBridge registered via Capacitor bridge");\
+                  }\
+              } catch (Exception e) {\
+                  android.util.Log.e("UMStudio", "Bridge registration failed", e);\
+              }' "$MAIN_FILE"
+                fi
+              fi
+            fi
           fi
 
       - name: Build Release APK
         run: |
-          set -e
-
           if [ -d "android/app" ] && [ ! -d "app" ]; then
             cd android
           fi
-
           chmod +x gradlew 2>/dev/null || true
-
           if [ -f "./gradlew" ]; then
             ./gradlew assembleRelease --stacktrace
           else
@@ -270,27 +339,16 @@ jobs:
           fi
 
           UNSIGNED_APK=$(find . -path "*/outputs/apk/release/*-unsigned.apk" | head -n 1)
-
           if [ -n "$UNSIGNED_APK" ]; then
-            echo "Found unsigned APK: $UNSIGNED_APK"
-            BUILD_TOOLS_VERSION=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)
-            APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner"
             SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}-signed.apk"
-
-            echo "Signing with: $APKSIGNER"
-            "$APKSIGNER" sign \
+            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | tail -n 1)/apksigner sign \
               --ks "$KEYSTORE_PATH" \
               --ks-key-alias upload \
               --ks-pass pass:"$STORE_PASSWORD" \
               --key-pass pass:"$KEY_PASSWORD" \
               --out "$SIGNED_APK" \
               "$UNSIGNED_APK"
-
             rm -f "$UNSIGNED_APK"
-            echo "Signed APK created: $SIGNED_APK"
-          else
-            echo "No unsigned APK found, checking for already signed APK..."
-            find . -path "*/outputs/apk/release/*.apk" | head -n 5
           fi
 
       - name: Upload Release APK Artifact
