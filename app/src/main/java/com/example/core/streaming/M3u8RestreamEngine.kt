@@ -217,6 +217,9 @@ class M3u8RestreamEngine(
                     _m3u8Bitrate.value = streamBitrateKbps
                     
                     if (_isRestreaming.value) {
+                        if (!_diagnosticIsError.value && _diagnosticMessage.value == "Connecting to RTMP...") {
+                            _diagnosticMessage.value = "Streaming Video ($realFps FPS)"
+                        }
                         streamManager.updateStats(streamBitrateKbps, realFps)
                     }
                 } else if (!_isRestreaming.value) {
@@ -255,9 +258,9 @@ class M3u8RestreamEngine(
 
             val targets = if (allUrls.isNotEmpty()) allUrls else listOf(primaryUrl)
             val outArgs = if (targets.size == 1) {
-                "-f flv \"${targets[0].trim().removeSurrounding("\"").removeSurrounding("'")}\""
+                "-flvflags no_duration_filesize -f flv \"${targets[0].trim().removeSurrounding("\"").removeSurrounding("'")}\""
             } else {
-                val teeList = targets.joinToString("|") { "[f=flv:onfail=ignore]${it.trim().removeSurrounding("\"").removeSurrounding("'")}" }
+                val teeList = targets.joinToString("|") { "[f=flv:flvflags=no_duration_filesize:onfail=ignore]${it.trim().removeSurrounding("\"").removeSurrounding("'")}" }
                 "-f tee -map 0:v -map 0:a? \"$teeList\""
             }
 
@@ -285,7 +288,7 @@ class M3u8RestreamEngine(
                 "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
             }
 
-            val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$cleanUrl\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+            val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i \"$cleanUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
             Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
 
             try { stopFfmpeg() } catch (e: Throwable) {}
@@ -321,7 +324,7 @@ class M3u8RestreamEngine(
                         Log.w("M3u8Engine", "Stream copy failed. Falling back to libx264 transcode...")
                         _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
                         _diagnosticIsError.value = false
-                        val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                        val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i \"$m3u8\" -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                         executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
                     } else if (_isRestreaming.value && session.returnCode?.isValueSuccess != true) {
                         val logs = session.allLogsAsString ?: ""
@@ -331,7 +334,7 @@ class M3u8RestreamEngine(
                             _diagnosticIsError.value = false
                             val httpUrl = m3u8.replaceFirst("https://", "http://")
                             val vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r $fps -g $gop -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
-                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -rw_timeout 15000000 -re -i \"$httpUrl\" $vCodecArgs -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -timeout 15000000 -rw_timeout 15000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
                             return@executeAsync
                         }
@@ -361,21 +364,36 @@ class M3u8RestreamEngine(
                     _diagnosticMessage.value = "Connecting to RTMP..."
                     _diagnosticIsError.value = false
                 }
-                msg.contains("Handshake successful", ignoreCase = true) || msg.contains("Metadata:", ignoreCase = true) || msg.contains("Stream mapping", ignoreCase = true) -> {
+                msg.contains("Output #0", ignoreCase = true) ||
+                msg.contains("Press [q] to stop", ignoreCase = true) ||
+                msg.contains("Stream mapping", ignoreCase = true) ||
+                msg.contains("frame=", ignoreCase = true) ||
+                msg.contains("fps=", ignoreCase = true) ||
+                msg.contains("Handshake successful", ignoreCase = true) ||
+                msg.contains("Metadata:", ignoreCase = true) ||
+                msg.contains("speed=", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Handshake OK • Publishing"
                     _diagnosticIsError.value = false
+                    streamManager.setStreamingStatus(StreamingStatus.STREAMING)
                 }
-                msg.contains("BadName", ignoreCase = true) || msg.contains("Authentication failed", ignoreCase = true) || msg.contains("Auth error", ignoreCase = true) -> {
+                msg.contains("BadName", ignoreCase = true) ||
+                msg.contains("Authentication failed", ignoreCase = true) ||
+                msg.contains("Auth error", ignoreCase = true) ||
+                msg.contains("Invalid stream", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Auth Failed: Invalid Stream Key"
                     _diagnosticIsError.value = true
                 }
-                msg.contains("Connection refused", ignoreCase = true) || msg.contains("Cannot open connection", ignoreCase = true) || msg.contains("Connection reset", ignoreCase = true) -> {
+                msg.contains("Connection refused", ignoreCase = true) ||
+                msg.contains("Cannot open connection", ignoreCase = true) ||
+                msg.contains("Connection reset", ignoreCase = true) ||
+                msg.contains("Server error", ignoreCase = true) -> {
                     _diagnosticMessage.value = "RTMP Error: Connection Refused"
                     _diagnosticIsError.value = true
                 }
                 msg.contains("Stream copy", ignoreCase = true) -> {
                     _diagnosticMessage.value = "Handshake OK • Stream Copy"
                     _diagnosticIsError.value = false
+                    streamManager.setStreamingStatus(StreamingStatus.STREAMING)
                 }
             }
         }, { stats ->

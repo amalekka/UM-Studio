@@ -12,6 +12,7 @@ import com.example.core.model.PlatformEndpoint
 import com.example.core.model.StreamConfig
 import com.example.core.model.VideoCodec
 import com.example.core.model.VideoQuality
+import com.example.core.model.buildDestinationUrl
 import com.example.core.streaming.LiveStreamService
 import com.example.core.streaming.StreamSource
 import com.example.core.streaming.StreamingStatus
@@ -529,9 +530,11 @@ class MainViewModel : ViewModel() {
     }
 
     fun startStream(context: Context, mediaProjectionResult: Intent? = null): Boolean {
-        val validEndpoints = _uiState.value.endpoints.filter { it.isEnabled && it.streamKey.isNotBlank() }
+        val validEndpoints = _uiState.value.endpoints.filter {
+            it.isEnabled && it.streamKey.isNotBlank() && it.url.trim().length > 7
+        }
         if (validEndpoints.isEmpty()) {
-            Toast.makeText(context, "Please enable at least one destination and enter a Stream Key in Destinations tab", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Please enable at least one destination with a valid URL and Stream Key", Toast.LENGTH_LONG).show()
             return false
         }
 
@@ -549,13 +552,7 @@ class MainViewModel : ViewModel() {
         val state = _uiState.value
 
         val allUrls = validEndpoints.map { ep ->
-            val rawUrl = ep.url.trim()
-            val key = ep.streamKey.trim()
-            when {
-                rawUrl.contains(key) && key.isNotBlank() -> rawUrl
-                rawUrl.endsWith("/") -> "$rawUrl$key"
-                else -> "$rawUrl/$key"
-            }
+            buildDestinationUrl(ep.url, ep.streamKey)
         }
         val primary = validEndpoints.first()
         val primaryUrl = allUrls.first()
@@ -665,7 +662,7 @@ class MainViewModel : ViewModel() {
                                     service?.getProManager()?.let { pro ->
                                         validEndpoints.drop(1).forEachIndexed { index, extra ->
                                             val extraUrl = allUrls[index + 1]
-                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl), service!!)
+                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl))
                                         }
                                         pro.startMultiStreaming()
                                     }
@@ -715,7 +712,7 @@ class MainViewModel : ViewModel() {
                                     service?.getProManager()?.let { pro ->
                                         validEndpoints.drop(1).forEachIndexed { index, extra ->
                                             val extraUrl = allUrls[index + 1]
-                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl), service!!)
+                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl))
                                         }
                                         pro.startMultiStreaming()
                                     }

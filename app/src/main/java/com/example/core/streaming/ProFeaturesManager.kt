@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.util.Log
 import android.view.Surface
 import com.example.core.model.PlatformEndpoint
+import com.example.core.model.buildDestinationUrl
 import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
 import com.pedro.encoder.input.gl.render.filters.`object`.TextObjectFilterRender
 import com.pedro.library.rtmp.RtmpCamera2
@@ -42,8 +43,28 @@ class ProFeaturesManager(
     private var versionTapCount = 0
 
     // 1. Multi-Platform Simultaneous Restreaming (Packet Multiplexing)
-    fun addExtraEndpoint(endpoint: PlatformEndpoint, connectChecker: ConnectChecker) {
-        val client = RtmpClient(connectChecker)
+    fun addExtraEndpoint(endpoint: PlatformEndpoint, connectChecker: ConnectChecker? = null) {
+        val isolatedChecker = object : ConnectChecker {
+            override fun onConnectionStarted(url: String) {
+                addLog("Connecting secondary: ${endpoint.name}")
+            }
+            override fun onConnectionSuccess() {
+                addLog("Connected secondary: ${endpoint.name}")
+            }
+            override fun onConnectionFailed(reason: String) {
+                Log.w("ProFeaturesManager", "Secondary endpoint ${endpoint.name} connection failed: $reason")
+                addLog("Secondary ${endpoint.name} failed: $reason (primary stream continues)")
+            }
+            override fun onNewBitrate(bitrate: Long) {}
+            override fun onDisconnect() {
+                addLog("Secondary disconnected: ${endpoint.name}")
+            }
+            override fun onAuthError() {
+                addLog("Secondary auth error: ${endpoint.name}")
+            }
+            override fun onAuthSuccess() {}
+        }
+        val client = RtmpClient(isolatedChecker)
         extraRtmpClients.add(endpoint to client)
         addLog("Added extra endpoint: ${endpoint.name}")
     }
@@ -52,7 +73,7 @@ class ProFeaturesManager(
         extraRtmpClients.forEach { (endpoint, client) ->
             scope.launch(Dispatchers.IO) {
                 try {
-                    val url = "${endpoint.url}/${endpoint.streamKey}"
+                    val url = buildDestinationUrl(endpoint.url, endpoint.streamKey)
                     client.connect(url)
                     addLog("Connected extra endpoint: ${endpoint.name}")
                 } catch (e: Exception) {

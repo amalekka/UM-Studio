@@ -8,6 +8,7 @@ import com.example.core.model.AspectRatioMode
 import com.example.core.model.StreamConfig
 import com.example.core.model.VideoQuality
 import com.example.core.model.VideoCodec
+import com.example.core.model.buildDestinationUrl
 import com.pedro.encoder.input.video.CameraOpenException
 import com.pedro.common.VideoCodec as RootVideoCodec
 import com.pedro.common.ConnectChecker
@@ -328,31 +329,33 @@ class StreamEngineManager(
         }
 
         val (width, height) = calculateResolution(quality, aspect)
+        val safeBitrate = quality.defaultBitrate.coerceIn(1_500_000, 4_500_000)
         
         val videoPrepared = if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
             rtmpCamera2?.setVideoCodec(codec)
-            rtmpCamera2?.prepareVideo(width, height, quality.fps, quality.defaultBitrate, 2) ?: false
+            rtmpCamera2?.prepareVideo(width, height, quality.fps, safeBitrate, 2) ?: false
         } else {
             rtmpDisplay?.setVideoCodec(codec)
-            rtmpDisplay?.prepareVideo(width, height, quality.fps, quality.defaultBitrate, 2, context.resources.configuration.densityDpi) ?: false
+            rtmpDisplay?.prepareVideo(width, height, quality.fps, safeBitrate, 2, context.resources.configuration.densityDpi) ?: false
         }
 
         val audioPrepared = if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
-            rtmpCamera2?.prepareAudio() ?: false
+            rtmpCamera2?.prepareAudio(128 * 1024, 44100, true, false, false) ?: false
         } else {
-            rtmpDisplay?.prepareAudio() ?: false
+            rtmpDisplay?.prepareAudio(128 * 1024, 44100, true, false, false) ?: false
         }
 
         if (videoPrepared && audioPrepared) {
             bitrateAdapter = BitrateAdapter { bitrate ->
+                val targetBitrate = bitrate.toInt().coerceIn(1_500_000, 4_500_000)
                 if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8) {
-                    rtmpCamera2?.setVideoBitrateOnFly(bitrate.toInt())
+                    rtmpCamera2?.setVideoBitrateOnFly(targetBitrate)
                 } else {
-                    rtmpDisplay?.setVideoBitrateOnFly(bitrate.toInt())
+                    rtmpDisplay?.setVideoBitrateOnFly(targetBitrate)
                 }
-                _bitrate.value = bitrate.toInt()
+                _bitrate.value = (targetBitrate / 1000)
             }
-            bitrateAdapter?.setMaxBitrate(quality.defaultBitrate)
+            bitrateAdapter?.setMaxBitrate(safeBitrate)
             return true
         }
         return false
@@ -373,6 +376,7 @@ class StreamEngineManager(
                 if (rtmpCamera2?.isOnPreview == false) {
                     startPreview()
                 }
+                prepareStream(currentConfig)
                 if (rtmpCamera2?.isStreaming == false) {
                     rtmpCamera2?.startStream(url)
                 }
@@ -381,6 +385,7 @@ class StreamEngineManager(
             } else {
                 mediaProjectionResult?.let {
                     rtmpDisplay?.setIntentResult(-1, it)
+                    prepareStream(currentConfig)
                     if (rtmpDisplay?.isStreaming == false) {
                         rtmpDisplay?.startStream(url)
                     }
@@ -536,12 +541,24 @@ class StreamEngineManager(
         if (isReleased) return
         Log.e("StreamEngine", "Connection failed: $reason")
         _diagnosticIsError.value = true
-        _diagnosticMessage.value = if (reason.contains("auth", true) || reason.contains("badname", true) || reason.contains("key", true)) {
-            "Auth Failed: Invalid Stream Key"
-        } else {
-            "Connection Failed: $reason"
+        _diagnosticMessage.value = when {
+            reason.contains("auth", true) || reason.contains("badname", true) || reason.contains("key", true) -> {
+                "Auth Failed: Invalid Stream Key"
+            }
+            reason.contains("Unimplemented message type", true) -> {
+                "Stream Rejected: Check Stream Key or Ingest URL"
+            }
+            reason.contains("refused", true) || reason.contains("reset", true) -> {
+                "RTMP Error: Connection Refused"
+            }
+            reason.contains("timeout", true) -> {
+                "RTMP Timeout: Check Network"
+            }
+            else -> {
+                "Connection Failed: $reason"
+            }
         }
-        if (currentConfig?.isAutoReconnectEnabled == true && reconnectAttempts < maxReconnectAttempts) {
+        if (currentConfig.isAutoReconnectEnabled && reconnectAttempts < maxReconnectAttempts) {
             attemptReconnect()
         } else {
             _status.value = StreamingStatus.ERROR
@@ -570,8 +587,9 @@ class StreamEngineManager(
             _status.value = StreamingStatus.RECONNECTING
             reconnectAttempts++
             delay(3000)
-            currentConfig?.endpoints?.firstOrNull { it.isEnabled }?.let { endpoint ->
-                val url = "${endpoint.url}/${endpoint.streamKey}"
+            currentConfig.endpoints.firstOrNull { it.isEnabled }?.let { endpoint ->
+                val url = buildDestinationUrl(endpoint.url, endpoint.streamKey)
+                prepareStream(currentConfig)
                 startStream(url)
             }
         }

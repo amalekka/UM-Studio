@@ -148,3 +148,26 @@ sealed class PlatformEndpoint {
         override val defaultUrl: String = "rtmp://"
     }
 }
+
+/**
+ * Normalizes and formats RTMP/RTMPS stream destination URLs safely across all streaming platforms
+ * (YouTube, Facebook, Twitch, TikTok, Kick, Twitter/X, Instagram, and Custom RTMP).
+ *
+ * Rules:
+ * 1. Trims whitespace, trailing/leading quotes, and trailing slashes.
+ * 2. If streamKey is already contained at the end of the URL path (e.g. ".../streamKey"), does NOT duplicate it.
+ * 3. Never truncates streamKey just because rawUrl happens to share a substring with it.
+ * 4. Ensures exactly one slash between endpoint URL and streamKey without double slashes ("//").
+ */
+fun buildDestinationUrl(rawUrl: String, rawKey: String): String {
+    val cleanUrl = rawUrl.trim().removeSurrounding("\"").removeSurrounding("'")
+    val cleanKey = rawKey.trim().removeSurrounding("\"").removeSurrounding("'")
+    if (cleanKey.isEmpty()) return cleanUrl
+    val normalizedUrl = cleanUrl.trimEnd('/')
+    if (normalizedUrl.endsWith("/$cleanKey", ignoreCase = false) ||
+        normalizedUrl.endsWith("=$cleanKey", ignoreCase = false) ||
+        normalizedUrl == cleanKey) {
+        return normalizedUrl
+    }
+    return "$normalizedUrl/$cleanKey"
+}
