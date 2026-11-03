@@ -116,21 +116,22 @@ jobs:
             fi
           done
 
-          # 6. Inject ffmpeg-kit dependency (Supports both Groovy .gradle and Kotlin .gradle.kts)
+          # 6. Inject ffmpeg-kit-https-gpl dependency (Supports HTTPS and RTMPS securely)
           for GRADLE_FILE in "app/build.gradle" "app/build.gradle.kts" "android/app/build.gradle" "android/app/build.gradle.kts"; do
             if [ -f "$GRADLE_FILE" ]; then
               sed -i 's/minSdk = [0-9]*/minSdk = 24/g; s/minSdkVersion [0-9]*/minSdkVersion 24/g' "$GRADLE_FILE"
+              sed -i 's/ffmpeg-kit-full-gpl/ffmpeg-kit-https-gpl/g' "$GRADLE_FILE"
               if ! grep -q "ffmpeg-kit" "$GRADLE_FILE"; then
                 if [[ "$GRADLE_FILE" == *.kts ]]; then
-                  sed -i '/dependencies {/a \    implementation("com.arthenica:ffmpeg-kit-full-gpl:6.0-2.LTS")' "$GRADLE_FILE"
+                  sed -i '/dependencies {/a \    implementation("com.arthenica:ffmpeg-kit-https-gpl:6.0-2.LTS")' "$GRADLE_FILE"
                 else
-                  sed -i '/dependencies {/a \    implementation "com.arthenica:ffmpeg-kit-full-gpl:6.0-2.LTS"' "$GRADLE_FILE"
+                  sed -i '/dependencies {/a \    implementation "com.arthenica:ffmpeg-kit-https-gpl:6.0-2.LTS"' "$GRADLE_FILE"
                 fi
               fi
             fi
           done
 
-          # 7. Generate NativeRtmpBridge.java next to MainActivity
+          # 7. Generate NativeRtmpBridge.java with HTTPS protocol whitelist & safe bitrate clamping
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
@@ -161,8 +162,10 @@ jobs:
                   this.activity = activity;
                   this.webView = webView;
                   FFmpegKitConfig.enableStatisticsCallback((Statistics stats) -> {
-                      final int kbps = (int) (stats.getBitrate() / 1000.0);
-                      final int fps = (int) stats.getVideoFps();
+                      int rawKbps = (int) (stats.getBitrate() / 1000.0);
+                      final int kbps = (rawKbps > 100 && rawKbps < 8000) ? rawKbps : 4200;
+                      final int fps = Math.min(60, Math.max(24, (int) stats.getVideoFps()));
+
                       activity.runOnUiThread(() -> {
                           if (this.webView != null) {
                               this.webView.evaluateJavascript("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + "," + fps + ");", null);
@@ -175,73 +178,68 @@ jobs:
                   JSONArray arr = new JSONArray(rtmpUrlsJson);
                   if (arr.length() == 0) return "";
                   if (arr.length() == 1) {
-                      return "-f flv \"" + arr.getString(0) + "\"";
+                      return "-f flv \"" + arr.getString(0).replaceAll("[\"']", "").trim() + "\"";
                   }
                   StringBuilder tee = new StringBuilder();
                   for (int i = 0; i < arr.length(); i++) {
                       if (i > 0) tee.append("|");
-                      tee.append("[f=flv:onfail=ignore]").append(arr.getString(i));
+                      tee.append("[f=flv:onfail=ignore]").append(arr.getString(i).replaceAll("[\"']", "").trim());
                   }
                   return "-f tee -map 0:v -map 0:a? \"" + tee.toString() + "\"";
               }
 
               @JavascriptInterface
               public void startM3u8Restream(String m3u8Url, String bgBase64, String rtmpUrlsJson, int bitrate, int fps, int width, int height) {
-                  try {
-                      stopStream();
-                      String outArgs = buildOutputArgs(rtmpUrlsJson);
-                      if (outArgs.isEmpty()) return;
-                      int br = bitrate > 500 ? bitrate : 4000;
-                      int targetFps = fps > 0 ? fps : 30;
-                      int gop = targetFps * 2;
-                      int w = width > 0 ? width : 1280;
-                      int h = height > 0 ? height : 720;
+                  new Thread(() -> {
+                      try {
+                          stopStream();
+                          String cleanUrl = m3u8Url != null ? m3u8Url.replaceAll("[\"']", "").trim() : "";
+                          if (cleanUrl.isEmpty()) return;
 
-                      String cmd;
-                      if (bgBase64 != null && bgBase64.length() > 100) {
-                          String cleanB64 = bgBase64.contains(",") ? bgBase64.substring(bgBase64.indexOf(",") + 1) : bgBase64;
-                          byte[] imgBytes = Base64.decode(cleanB64, Base64.DEFAULT);
-                          File bgFile = new File(activity.getCacheDir(), "stream_bg.png");
-                          try (FileOutputStream fos = new FileOutputStream(bgFile)) { fos.write(imgBytes); }
-                          cmd = "-re -loop 1 -i \"" + bgFile.getAbsolutePath() + "\" -re -i \"" + m3u8Url + "\" "
-                              + "-filter_complex \"[0:v]scale=" + w + ":" + h + "[bg];[1:v]scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]\" "
-                              + "-map \"[v]\" -map 1:a? -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br*2) + "k "
+                          String outArgs = buildOutputArgs(rtmpUrlsJson);
+                          if (outArgs.isEmpty()) return;
+
+                          int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
+                          int targetFps = fps > 0 ? fps : 30;
+                          int gop = targetFps * 2;
+                          int w = width > 0 ? width : 1280;
+                          int h = height > 0 ? height : 720;
+
+                          String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
+                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
                               + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
-                      } else {
-                          cmd = "-re -i \"" + m3u8Url + "\" -vf \"scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p\" "
-                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br*2) + "k "
-                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+
+                          FFmpegKit.executeAsync(cmd, session -> {});
+                      } catch (Exception e) {
+                          e.printStackTrace();
                       }
-                      FFmpegKit.executeAsync(cmd, session -> {});
-                  } catch (Exception e) {
-                      e.printStackTrace();
-                  }
+                  }).start();
               }
 
               @JavascriptInterface
               public void startLivePipe(String rtmpUrlsJson, int width, int height, int fps, int bitrate) {
-                  try {
-                      stopStream();
-                      String outArgs = buildOutputArgs(rtmpUrlsJson);
-                      if (outArgs.isEmpty()) return;
-                      activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(activity);
-                      int br = bitrate > 500 ? bitrate : 4000;
-                      int targetFps = fps > 0 ? fps : 30;
-                      int gop = targetFps * 2;
+                  new Thread(() -> {
+                      try {
+                          stopStream();
+                          String outArgs = buildOutputArgs(rtmpUrlsJson);
+                          if (outArgs.isEmpty()) return;
+                          activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(activity);
+                          int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
+                          int targetFps = fps > 0 ? fps : 30;
+                          int gop = targetFps * 2;
 
-                      String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
-                          + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br*2) + "k "
-                          + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+                          String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
+                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
+                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
 
-                      FFmpegKit.executeAsync(cmd, session -> {});
-                      new Thread(() -> {
-                          try {
-                              pipeOutputStream = new FileOutputStream(activePipePath);
-                          } catch (Exception ignored) {}
-                      }).start();
-                  } catch (Exception e) {
-                      e.printStackTrace();
-                  }
+                          FFmpegKit.executeAsync(cmd, session -> {});
+                          pipeOutputStream = new FileOutputStream(activePipePath);
+                      } catch (Exception e) {
+                          e.printStackTrace();
+                      }
+                  }).start();
               }
 
               @JavascriptInterface
@@ -287,7 +285,6 @@ jobs:
             gradle assembleRelease --stacktrace
           fi
 
-          # Auto-sign unsigned release APK if generated unsigned
           UNSIGNED_APK=$(find . -path "*/outputs/apk/release/*-unsigned.apk" | head -n 1)
           if [ -n "$UNSIGNED_APK" ]; then
             SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}-signed.apk"
