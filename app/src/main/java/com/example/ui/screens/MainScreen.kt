@@ -127,7 +127,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     selected = currentTab == 1,
                     onClick = { viewModel.setCurrentTab(1) },
                     icon = { Icon(Icons.Default.Dns, "M3U8 & Streams") },
-                    label = { Text("M3U8 & Streams", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Streams", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = Color(0xFF10B981),
                         selectedTextColor = Color(0xFF10B981),

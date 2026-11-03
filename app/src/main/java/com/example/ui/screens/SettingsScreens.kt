@@ -220,7 +220,7 @@ fun AdvancedSettingsScreen(viewModel: MainViewModel) {
             // Footer
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    "بواسطة UM Tag",
+                    "by UM Tag",
                     fontSize = 12.sp,
                     color = Color.White.copy(alpha = 0.8f),
                     fontWeight = FontWeight.Bold

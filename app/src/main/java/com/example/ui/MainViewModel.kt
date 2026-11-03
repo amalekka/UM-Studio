@@ -535,6 +535,16 @@ class MainViewModel : ViewModel() {
             return false
         }
 
+        val currService = service
+        if (currService == null) {
+            Toast.makeText(context, "Streaming service is initializing. Please wait a moment and try again.", Toast.LENGTH_LONG).show()
+            try {
+                val intent = Intent(context, LiveStreamService::class.java)
+                context.startForegroundService(intent)
+            } catch (e: Exception) {}
+            return false
+        }
+
         val config = _uiState.value.streamConfig.copy(endpoints = validEndpoints)
         val state = _uiState.value
 
