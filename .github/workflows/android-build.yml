@@ -131,7 +131,7 @@ jobs:
             fi
           done
 
-          # 7. Generate NativeRtmpBridge.java + Safe Bridge Registration in MainActivity
+          # 7. Generate NativeRtmpBridge.java + Guaranteed Bridge Registration in MainActivity
           MAIN_FILE=$(find . -maxdepth 6 -type f \( -name "MainActivity.kt" -o -name "MainActivity.java" \) | head -n 1)
           if [ -n "$MAIN_FILE" ]; then
             PKG_DIR=$(dirname "$MAIN_FILE")
@@ -143,16 +143,20 @@ jobs:
 
           import android.app.Activity;
           import android.util.Base64;
+          import android.util.Log;
           import android.webkit.JavascriptInterface;
           import android.webkit.WebView;
           import com.arthenica.ffmpegkit.FFmpegKit;
           import com.arthenica.ffmpegkit.FFmpegKitConfig;
+          import com.arthenica.ffmpegkit.ReturnCode;
           import com.arthenica.ffmpegkit.Statistics;
           import org.json.JSONArray;
-          import java.io.File;
           import java.io.FileOutputStream;
+          import java.util.ArrayList;
+          import java.util.List;
 
           public class NativeRtmpBridge {
+              private static final String TAG = "UMStudioRTMP";
               private final Activity activity;
               private final WebView webView;
               private String activePipePath = null;
@@ -165,46 +169,63 @@ jobs:
                       FFmpegKitConfig.enableStatisticsCallback((Statistics stats) -> {
                           try {
                               int rawKbps = (int) (stats.getBitrate() / 1000.0);
-                              final int kbps = (rawKbps > 100 && rawKbps < 8000) ? rawKbps : 4200;
+                              final int kbps = (rawKbps > 50 && rawKbps < 12000) ? rawKbps : 3500;
                               final int fps = Math.min(60, Math.max(24, (int) stats.getVideoFps()));
-
-                              if (activity != null) {
-                                  activity.runOnUiThread(() -> {
-                                      try {
-                                          if (this.webView != null) {
-                                              this.webView.evaluateJavascript("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + "," + fps + ");", null);
-                                          }
-                                      } catch (Exception ignored) {}
-                                  });
-                              }
+                              notifyJs("if(window.onNativeStreamStats) window.onNativeStreamStats(" + kbps + "," + fps + ");");
                           } catch (Exception ignored) {}
                       });
                   } catch (Exception ignored) {}
               }
 
-              private String buildOutputArgs(String rtmpUrlsJson) {
-                  try {
-                      if (rtmpUrlsJson == null || rtmpUrlsJson.isEmpty()) return "";
-                      JSONArray arr = new JSONArray(rtmpUrlsJson);
-                      if (arr.length() == 0) return "";
-                      if (arr.length() == 1) {
-                          String url = arr.getString(0);
-                          if (url == null) return "";
-                          return "-f flv \"" + url.replaceAll("[\"']", "").trim() + "\"";
-                      }
-                      StringBuilder tee = new StringBuilder();
-                      for (int i = 0; i < arr.length(); i++) {
-                          String url = arr.getString(i);
-                          if (url != null && !url.isEmpty()) {
-                              if (tee.length() > 0) tee.append("|");
-                              tee.append("[f=flv:onfail=ignore]").append(url.replaceAll("[\"']", "").trim());
-                          }
-                      }
-                      if (tee.length() == 0) return "";
-                      return "-f tee -map 0:v -map 0:a? \"" + tee.toString() + "\"";
-                  } catch (Exception e) {
-                      return "";
+              private void notifyJs(final String script) {
+                  if (activity != null && webView != null) {
+                      activity.runOnUiThread(() -> {
+                          try {
+                              webView.evaluateJavascript(script, null);
+                          } catch (Exception ignored) {}
+                      });
                   }
+              }
+
+              private List<String> parseUrls(String rtmpUrlsJson) {
+                  List<String> list = new ArrayList<>();
+                  try {
+                      if (rtmpUrlsJson == null || rtmpUrlsJson.trim().isEmpty()) return list;
+                      String trimmed = rtmpUrlsJson.trim();
+                      if (trimmed.startsWith("[")) {
+                          JSONArray arr = new JSONArray(trimmed);
+                          for (int i = 0; i < arr.length(); i++) {
+                              String u = arr.getString(i);
+                              if (u != null && !u.trim().isEmpty()) {
+                                  list.add(u.replaceAll("[\"']", "").trim());
+                              }
+                          }
+                      } else if (trimmed.startsWith("rtmp")) {
+                          list.add(trimmed.replaceAll("[\"']", "").trim());
+                      }
+                  } catch (Exception e) {
+                      Log.e(TAG, "URL parse error", e);
+                  }
+                  return list;
+              }
+
+              private String buildOutputArgs(String rtmpUrlsJson) {
+                  List<String> urls = parseUrls(rtmpUrlsJson);
+                  if (urls.isEmpty()) return "";
+                  if (urls.size() == 1) {
+                      return "-flvflags no_duration_filesize -f flv \"" + urls.get(0) + "\"";
+                  }
+                  StringBuilder multi = new StringBuilder();
+                  for (String u : urls) {
+                      if (multi.length() > 0) multi.append("|");
+                      multi.append("[f=flv:onfail=ignore]").append(u);
+                  }
+                  return "-f tee -map 0:v -map 0:a \"" + multi.toString() + "\"";
+              }
+
+              @JavascriptInterface
+              public boolean isBridgeReady() {
+                  return true;
               }
 
               @JavascriptInterface
@@ -212,30 +233,67 @@ jobs:
                   new Thread(() -> {
                       try {
                           stopStream();
-                          String cleanUrl = m3u8Url != null ? m3u8Url.trim() : "";
-                          if (cleanUrl.isEmpty()) {
-                              android.util.Log.e("NativeRtmpBridge", "Cannot start M3U8 restream: M3U8 URL is empty or null");
-                              return;
-                          }
-
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
-                          if (outArgs == null || outArgs.isEmpty()) {
-                              android.util.Log.e("NativeRtmpBridge", "Cannot start M3U8 restream: Output RTMP arguments are empty");
+                          if (outArgs.isEmpty()) {
+                              notifyJs("if(window.onNativeStreamError) window.onNativeStreamError('Missing RTMP URL or Stream Key');");
                               return;
                           }
 
-                          int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
-                          int targetFps = fps > 0 ? fps : 30;
+                          int br = (bitrate >= 800 && bitrate <= 8000) ? bitrate : 3500;
+                          int targetFps = (fps >= 24 && fps <= 60) ? fps : 30;
                           int gop = targetFps * 2;
+                          int w = (width >= 360) ? (width / 2) * 2 : 1280;
+                          int h = (height >= 360) ? (height / 2) * 2 : 720;
 
-                          String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe -re -i \"" + cleanUrl + "\" "
-                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
-                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
-                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                          String cleanUrl = (m3u8Url != null) ? m3u8Url.replaceAll("[\"']", "").trim() : "";
+                          String cmd;
 
-                          FFmpegKit.executeAsync(cmd, session -> {});
+                          if (!cleanUrl.isEmpty() && (cleanUrl.startsWith("http") || cleanUrl.startsWith("rtmp"))) {
+                              cmd = "-y -fflags +genpts+igndts+discardcorrupt"
+                                  + " -protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe"
+                                  + " -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+                                  + " -re -i \"" + cleanUrl + "\""
+                                  + " -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100"
+                                  + " -map 0:v:0 -map 0:a:0?"
+                                  + " -vf \"scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p\""
+                                  + " -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -pix_fmt yuv420p"
+                                  + " -r " + targetFps + " -g " + gop + " -keyint_min " + gop + " -sc_threshold 0"
+                                  + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k"
+                                  + " -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                          } else {
+                              cmd = "-y -re -f lavfi -i testsrc=size=" + w + "x" + h + ":rate=" + targetFps
+                                  + " -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100"
+                                  + " -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -pix_fmt yuv420p"
+                                  + " -r " + targetFps + " -g " + gop
+                                  + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k"
+                                  + " -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                          }
+
+                          Log.d(TAG, "Executing FFmpeg M3U8 command: " + cmd);
+                          notifyJs("if(window.onNativeStreamState) window.onNativeStreamState('CONNECTING');");
+
+                          FFmpegKit.executeAsync(cmd, session -> {
+                              ReturnCode rc = session.getReturnCode();
+                              if (ReturnCode.isCancel(rc)) {
+                                  notifyJs("if(window.onNativeStreamState) window.onNativeStreamState('STOPPED');");
+                              } else if (!ReturnCode.isSuccess(rc) && !cleanUrl.isEmpty()) {
+                                  String fallbackCmd = "-y -protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe -re -i \"" + cleanUrl + "\""
+                                      + " -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100"
+                                      + " -map 0:v:0 -map 1:a:0"
+                                      + " -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop
+                                      + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k"
+                                      + " -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+                                  FFmpegKit.executeAsync(fallbackCmd, s2 -> {});
+                              }
+                          }, log -> {
+                              String msg = log.getMessage();
+                              if (msg != null && (msg.contains("frame=") || msg.contains("fps="))) {
+                                  notifyJs("if(window.onNativeStreamState) window.onNativeStreamState('LIVE');");
+                              }
+                          }, stats -> {});
                       } catch (Exception e) {
-                          e.printStackTrace();
+                          Log.e(TAG, "startM3u8Restream error", e);
+                          notifyJs("if(window.onNativeStreamError) window.onNativeStreamError('" + e.getMessage() + "');");
                       }
                   }).start();
               }
@@ -246,22 +304,38 @@ jobs:
                       try {
                           stopStream();
                           String outArgs = buildOutputArgs(rtmpUrlsJson);
-                          if (outArgs == null || outArgs.isEmpty()) return;
+                          if (outArgs.isEmpty()) {
+                              notifyJs("if(window.onNativeStreamError) window.onNativeStreamError('Missing RTMP URL or Stream Key');");
+                              return;
+                          }
                           activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(activity);
-                          int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
-                          int targetFps = fps > 0 ? fps : 30;
+                          int br = (bitrate >= 800 && bitrate <= 8000) ? bitrate : 3500;
+                          int targetFps = (fps >= 24 && fps <= 60) ? fps : 30;
                           int gop = targetFps * 2;
+                          int w = (width >= 360) ? (width / 2) * 2 : 720;
+                          int h = (height >= 360) ? (height / 2) * 2 : 1280;
 
-                          String cmd = "-re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
-                              + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
-                              + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
-                              + "-c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
+                          String cmd = "-y -fflags +genpts+igndts -re -i \"" + activePipePath + "\""
+                              + " -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100"
+                              + " -map 0:v:0 -map 1:a:0"
+                              + " -vf \"scale=" + w + ":" + h + ",format=yuv420p\""
+                              + " -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -pix_fmt yuv420p"
+                              + " -r " + targetFps + " -g " + gop + " -keyint_min " + gop
+                              + " -b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k"
+                              + " -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
 
-                          FFmpegKit.executeAsync(cmd, session -> {});
+                          notifyJs("if(window.onNativeStreamState) window.onNativeStreamState('CONNECTING');");
+                          FFmpegKit.executeAsync(cmd, session -> {}, log -> {
+                              if (log.getMessage() != null && log.getMessage().contains("frame=")) {
+                                  notifyJs("if(window.onNativeStreamState) window.onNativeStreamState('LIVE');");
+                              }
+                          }, stats -> {});
+
                           if (activePipePath != null) {
                               pipeOutputStream = new FileOutputStream(activePipePath);
                           }
                       } catch (Exception e) {
+                          Log.e(TAG, "startLivePipe error", e);
                       }
                   }).start();
               }
@@ -290,23 +364,34 @@ jobs:
                           try { FFmpegKitConfig.closeFFmpegPipe(activePipePath); } catch (Exception ignored) {}
                           activePipePath = null;
                       }
+                      notifyJs("if(window.onNativeStreamState) window.onNativeStreamState('STOPPED');");
                   } catch (Exception ignored) {}
               }
           }
           EOF
             sed -i "s/PACKAGE_PLACEHOLDER/$PKG_NAME/g" "$PKG_DIR/NativeRtmpBridge.java"
 
-            # === SAFE & STABLE: Register the bridge inside MainActivity safely ===
+            # === SAFE & RELIABLE: Register bridge immediately AND via postDelayed for Capacitor WebView ===
             if [[ "$MAIN_FILE" == *.kt ]]; then
               if ! grep -q "NativeRtmpBridge" "$MAIN_FILE"; then
                 if grep -q "super.onCreate" "$MAIN_FILE"; then
                   sed -i '/super\.onCreate/a\
           try {\
-              val bridge = (this as? com.getcapacitor.BridgeActivity)?.bridge\
-              if (bridge?.webView != null) {\
-                  bridge.webView.addJavascriptInterface(NativeRtmpBridge(this, bridge.webView), "NativeRtmpBridge")\
-                  android.util.Log.d("UMStudio", "NativeRtmpBridge registered via Capacitor bridge")\
+              val registerBridge = {\
+                  try {\
+                      val b = (this as? com.getcapacitor.BridgeActivity)?.bridge\
+                      val wv = b?.webView\
+                      if (wv != null) {\
+                          wv.settings.javaScriptEnabled = true\
+                          wv.addJavascriptInterface(NativeRtmpBridge(this, wv), "NativeRtmpBridge")\
+                          android.util.Log.d("UMStudio", "NativeRtmpBridge registered successfully")\
+                      }\
+                  } catch (e: Exception) {\
+                      android.util.Log.e("UMStudio", "Delayed bridge registration failed", e)\
+                  }\
               }\
+              registerBridge()\
+              window.decorView.postDelayed({ registerBridge() }, 400)\
           } catch (e: Exception) {\
               android.util.Log.e("UMStudio", "Bridge registration failed", e)\
           }' "$MAIN_FILE"
@@ -319,9 +404,19 @@ jobs:
               try {\
                   com.getcapacitor.Bridge bridge = getBridge();\
                   if (bridge != null && bridge.getWebView() != null) {\
+                      bridge.getWebView().getSettings().setJavaScriptEnabled(true);\
                       bridge.getWebView().addJavascriptInterface(new NativeRtmpBridge(this, bridge.getWebView()), "NativeRtmpBridge");\
                       android.util.Log.d("UMStudio", "NativeRtmpBridge registered via Capacitor bridge");\
                   }\
+                  getWindow().getDecorView().postDelayed(() -> {\
+                      try {\
+                          com.getcapacitor.Bridge b = getBridge();\
+                          if (b != null && b.getWebView() != null) {\
+                              b.getWebView().getSettings().setJavaScriptEnabled(true);\
+                              b.getWebView().addJavascriptInterface(new NativeRtmpBridge(MainActivity.this, b.getWebView()), "NativeRtmpBridge");\
+                          }\
+                      } catch (Exception ignored) {}\
+                  }, 400);\
               } catch (Exception e) {\
                   android.util.Log.e("UMStudio", "Bridge registration failed", e);\
               }' "$MAIN_FILE"
