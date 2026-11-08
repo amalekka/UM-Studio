@@ -36,12 +36,15 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.core.model.PlatformEndpoint
 import com.example.core.repository.DestinationsRepository
 import com.example.ui.MainViewModel
 import com.example.ui.components.GlowingToggle
 import com.example.ui.components.SettingsBackground
 import kotlinx.coroutines.launch
+import com.example.ui.localizedString
+import com.example.ui.getLineHeight
 
 sealed class TestStatus {
     data object Idle : TestStatus()
@@ -83,32 +86,19 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                     ) {
                         Column {
                             Text(
-                                "TARGETS",
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Black,
+                                localizedString("PLATFORMS", viewModel),
                                 color = Color.White,
-                                letterSpacing = 2.sp
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
                             )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(
-                                            if (activeCount > 0) Color(0xFF10B981) else Color(0xFFF59E0B),
-                                            CircleShape
-                                        )
-                                )
-                                Text(
-                                    if (activeCount > 0) "$activeCount ACTIVE" else "STANDBY • NO TARGET",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (activeCount > 0) Color(0xFF34D399) else Color(0xFFFBBF24),
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp
-                                )
-                            }
+                            Text(
+                                localizedString("PLATFORMS_SUB", viewModel),
+                                color = Color(0xFF94A3B8),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
 
                         // Quick enable / reset chip
@@ -140,10 +130,11 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    if (activeCount > 0) "MUTE ALL" else "ENABLE ALL",
+                                    if (activeCount > 0) localizedString("MUTE", viewModel) else localizedString("UNMUTE", viewModel),
                                     color = Color.White,
                                     fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = getLineHeight(viewModel)
                                 )
                             }
                         }
@@ -167,19 +158,21 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                         ) {
                             Column {
                                 Text(
-                                    "READINESS",
+                                    localizedString("READINESS", viewModel),
                                     color = Color.White.copy(alpha = 0.5f),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp
+                                    letterSpacing = 1.sp,
+                                    lineHeight = getLineHeight(viewModel)
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    if (activeCount > 0) "Ready ($activeCount active)"
-                                    else "Key Required",
+                                    if (activeCount > 0) "${localizedString("READY", viewModel)} ($activeCount ${localizedString("ACTIVE", viewModel)})"
+                                    else localizedString("DISABLED", viewModel),
                                     color = Color.White,
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = getLineHeight(viewModel)
                                 )
                             }
 
@@ -190,7 +183,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                                     border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.4f))
                                 ) {
                                     Text(
-                                        "$configuredCount Configured",
+                                        "$configuredCount ${localizedString("ACTIVE", viewModel)}",
                                         color = Color(0xFF34D399),
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -203,7 +196,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                                     border = BorderStroke(1.dp, Color(0xFF818CF8).copy(alpha = 0.4f))
                                 ) {
                                     Text(
-                                        "$activeCount Live",
+                                        "$activeCount ${localizedString("LIVE", viewModel)}",
                                         color = Color(0xFFA5B4FC),
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -224,17 +217,11 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "MAJOR PLATFORMS",
+                        localizedString("MAJOR_PLATFORMS", viewModel),
                         color = Color(0xFF818CF8),
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.5.sp
-                    )
-                    Text(
-                        "PRE-CONFIGURED RTMP/RTMPS",
-                        color = Color.White.copy(alpha = 0.4f),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
             }
@@ -242,6 +229,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
             items(majorEndpoints, key = { it.id }) { endpoint ->
                 PlatformExpandableCard(
                     endpoint = endpoint,
+                    viewModel = viewModel,
                     onToggle = { isEnabled ->
                         viewModel.toggleDestination(context, endpoint.id, isEnabled)
                         if (isEnabled && endpoint.streamKey.isBlank()) {
@@ -280,17 +268,11 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                 ) {
                     Column {
                         Text(
-                            "CUSTOM RTMP SERVERS",
+                            localizedString("CUSTOM_SERVERS", viewModel),
                             color = Color(0xFF38BDF8),
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 1.5.sp
-                        )
-                        Text(
-                            "UNLIMITED CUSTOM ENDPOINTS & RELAYS",
-                            color = Color.White.copy(alpha = 0.4f),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
 
@@ -310,9 +292,10 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            if (showAddCustomDialog) "CANCEL" else "ADD SERVER",
+                            if (showAddCustomDialog) localizedString("CANCEL", viewModel) else localizedString("ADD_SERVER", viewModel),
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Black
+                            fontWeight = FontWeight.Black,
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
                 }
@@ -322,6 +305,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
             if (showAddCustomDialog) {
                 item {
                     AddCustomServerForm(
+                        viewModel = viewModel,
                         onAdd = { name, url, key ->
                             viewModel.addCustomDestination(context, name, url, key)
                             showAddCustomDialog = false
@@ -356,17 +340,19 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                "No Custom Servers Added",
+                                localizedString("NO_CUSTOM_SERVERS", viewModel),
                                 color = Color.White.copy(alpha = 0.7f),
                                 fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                lineHeight = getLineHeight(viewModel)
                             )
                             Text(
-                                "Add custom RTMP, RTMPS, or SRT relays for Telegram, private servers, or CDN ingests.",
+                                localizedString("CUSTOM_SERVERS_DESC", viewModel),
                                 color = Color.White.copy(alpha = 0.4f),
                                 fontSize = 11.sp,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                modifier = Modifier.padding(top = 4.dp, start = 16.dp, end = 16.dp)
+                                modifier = Modifier.padding(top = 4.dp, start = 16.dp, end = 16.dp),
+                                lineHeight = getLineHeight(viewModel)
                             )
                         }
                     }
@@ -375,6 +361,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                 items(customEndpoints, key = { it.id }) { custom ->
                     CustomServerExpandableCard(
                         custom = custom,
+                        viewModel = viewModel,
                         onToggle = { isEnabled ->
                             viewModel.toggleDestination(context, custom.id, isEnabled)
                         },
@@ -405,6 +392,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
 @Composable
 fun PlatformExpandableCard(
     endpoint: PlatformEndpoint,
+    viewModel: MainViewModel,
     onToggle: (Boolean) -> Unit,
     onSave: (url: String, key: String) -> Unit,
     onReset: () -> Unit
@@ -485,11 +473,12 @@ fun PlatformExpandableCard(
                                 )
                             ) {
                                 Text(
-                                    if (isConfigured) "Configured" else "Not Set",
+                                    if (isConfigured) localizedString("ACTIVE", viewModel) else localizedString("DISABLED", viewModel),
                                     color = if (isConfigured) Color(0xFF34D399) else Color(0xFF9CA3AF),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    lineHeight = getLineHeight(viewModel)
                                 )
                             }
 
@@ -574,19 +563,21 @@ fun PlatformExpandableCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "SERVER / INGEST URL",
+                                localizedString("SERVER_URL", viewModel),
                                 color = Color.White.copy(alpha = 0.5f),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
+                                letterSpacing = 1.sp,
+                                lineHeight = getLineHeight(viewModel)
                             )
                             if (urlText != endpoint.defaultUrl) {
                                 Text(
-                                    "RESTORE DEFAULT",
+                                    localizedString("RESTORE_DEFAULT", viewModel),
                                     color = meta.accentColor,
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.clickable { urlText = endpoint.defaultUrl }
+                                    modifier = Modifier.clickable { urlText = endpoint.defaultUrl },
+                                    lineHeight = getLineHeight(viewModel)
                                 )
                             }
                         }
@@ -612,17 +603,18 @@ fun PlatformExpandableCard(
                     Column {
                         var showKey by remember { mutableStateOf(false) }
                         Text(
-                            "STREAM KEY",
+                            localizedString("STREAM_KEY", viewModel),
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.sp,
+                            lineHeight = getLineHeight(viewModel)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         StreamInputField(
                             value = keyText,
                             onValueChange = { keyText = it },
-                            placeholder = "Paste your ${endpoint.name} Stream Key",
+                            placeholder = "${localizedString("PASTE", viewModel)} ${endpoint.name} ${localizedString("STREAM_KEY", viewModel)}",
                             isPassword = !showKey,
                             trailingAction = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -652,11 +644,12 @@ fun PlatformExpandableCard(
                                         modifier = Modifier.padding(end = 4.dp)
                                     ) {
                                         Text(
-                                            "PASTE",
+                                            localizedString("PASTE", viewModel),
                                             color = Color(0xFFA5B4FC),
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Black,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                            lineHeight = getLineHeight(viewModel)
                                         )
                                     }
                                 }
@@ -666,7 +659,7 @@ fun PlatformExpandableCard(
 
                     // Test Connection Result Badge (if tested)
                     if (testStatus !is TestStatus.Idle) {
-                        ConnectionStatusBanner(status = testStatus)
+                        ConnectionStatusBanner(status = testStatus, viewModel = viewModel)
                     }
 
                     // 3. Action Row: Save Config, Reset, Test Connection
@@ -692,7 +685,7 @@ fun PlatformExpandableCard(
                         ) {
                             Icon(Icons.Default.Check, null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("SAVE CONFIG", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            Text(localizedString("SAVE", viewModel), fontSize = 11.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                         }
 
                         // Test Connection Button
@@ -718,11 +711,11 @@ fun PlatformExpandableCard(
                                     color = Color(0xFF38BDF8)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("TESTING...", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("TESTING_ELLIPSIS", viewModel), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                             } else {
                                 Icon(Icons.Default.Speed, null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("TEST PING", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("TEST_PING", viewModel), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                             }
                         }
 
@@ -759,6 +752,7 @@ fun PlatformExpandableCard(
 @Composable
 fun CustomServerExpandableCard(
     custom: PlatformEndpoint.CustomRTMP,
+    viewModel: MainViewModel,
     onToggle: (Boolean) -> Unit,
     onSave: (name: String, url: String, key: String) -> Unit,
     onDelete: () -> Unit
@@ -834,11 +828,12 @@ fun CustomServerExpandableCard(
                                 )
                             ) {
                                 Text(
-                                    if (isConfigured) "Configured" else "Not Set",
+                                    if (isConfigured) localizedString("ACTIVE", viewModel) else localizedString("DISABLED", viewModel),
                                     color = if (isConfigured) Color(0xFF34D399) else Color(0xFF9CA3AF),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    lineHeight = getLineHeight(viewModel)
                                 )
                             }
                         }
@@ -893,11 +888,12 @@ fun CustomServerExpandableCard(
                     // Platform Name
                     Column {
                         Text(
-                            "CUSTOM SERVER LABEL",
+                            localizedString("CUSTOM_SERVER_LABEL", viewModel),
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.sp,
+                            lineHeight = getLineHeight(viewModel)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         StreamInputField(
@@ -910,11 +906,12 @@ fun CustomServerExpandableCard(
                     // Server URL
                     Column {
                         Text(
-                            "RTMP / RTMPS / SRT INGEST URL",
+                            localizedString("RTMP_INGEST_URL", viewModel),
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.sp,
+                            lineHeight = getLineHeight(viewModel)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         StreamInputField(
@@ -928,17 +925,18 @@ fun CustomServerExpandableCard(
                     Column {
                         var showKey by remember { mutableStateOf(false) }
                         Text(
-                            "STREAM KEY",
+                            localizedString("STREAM_KEY", viewModel),
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.sp,
+                            lineHeight = getLineHeight(viewModel)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         StreamInputField(
                             value = keyText,
                             onValueChange = { keyText = it },
-                            placeholder = "Stream Key or channel token",
+                            placeholder = localizedString("STREAM_KEY_PLACEHOLDER", viewModel),
                             isPassword = !showKey,
                             trailingAction = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -963,11 +961,12 @@ fun CustomServerExpandableCard(
                                         modifier = Modifier.padding(end = 4.dp)
                                     ) {
                                         Text(
-                                            "PASTE",
+                                            localizedString("PASTE", viewModel),
                                             color = Color(0xFF67E8F9),
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Black,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                            lineHeight = getLineHeight(viewModel)
                                         )
                                     }
                                 }
@@ -977,7 +976,7 @@ fun CustomServerExpandableCard(
 
                     // Connection Test Banner
                     if (testStatus !is TestStatus.Idle) {
-                        ConnectionStatusBanner(status = testStatus)
+                        ConnectionStatusBanner(status = testStatus, viewModel = viewModel)
                     }
 
                     // Action Row
@@ -1000,7 +999,7 @@ fun CustomServerExpandableCard(
                         ) {
                             Icon(Icons.Default.Check, null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("SAVE CHANGES", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            Text(localizedString("SAVE_CHANGES", viewModel), fontSize = 11.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                         }
 
                         OutlinedButton(
@@ -1025,11 +1024,11 @@ fun CustomServerExpandableCard(
                                     color = Color(0xFF38BDF8)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("PROBING...", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("PROBING", viewModel), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                             } else {
                                 Icon(Icons.Default.Speed, null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("TEST RTMP", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("TEST_RTMP", viewModel), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                             }
                         }
 
@@ -1060,6 +1059,7 @@ fun CustomServerExpandableCard(
 
 @Composable
 fun AddCustomServerForm(
+    viewModel: MainViewModel,
     onAdd: (name: String, url: String, key: String) -> Unit,
     onCancel: () -> Unit
 ) {
@@ -1087,11 +1087,12 @@ fun AddCustomServerForm(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "ADD CUSTOM RTMP DESTINATION",
+                    localizedString("ADD_CUSTOM_DESTINATION", viewModel),
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp
+                    letterSpacing = 1.sp,
+                    lineHeight = getLineHeight(viewModel)
                 )
                 IconButton(onClick = onCancel, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Close, null, tint = Color.White.copy(alpha = 0.6f))
@@ -1100,7 +1101,7 @@ fun AddCustomServerForm(
 
             // Platform Name
             Column {
-                Text("NAME / LABEL", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("NAME_LABEL", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 Spacer(modifier = Modifier.height(4.dp))
                 StreamInputField(
                     value = name,
@@ -1111,7 +1112,7 @@ fun AddCustomServerForm(
 
             // Server URL
             Column {
-                Text("SERVER URL (rtmp://, rtmps://, or srt://)", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("SERVER_URL_HINT", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 Spacer(modifier = Modifier.height(4.dp))
                 StreamInputField(
                     value = url,
@@ -1122,12 +1123,12 @@ fun AddCustomServerForm(
 
             // Stream Key
             Column {
-                Text("STREAM KEY", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("STREAM_KEY", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 Spacer(modifier = Modifier.height(4.dp))
                 StreamInputField(
                     value = key,
                     onValueChange = { key = it },
-                    placeholder = "Stream Key (optional for open relays)",
+                    placeholder = localizedString("STREAM_KEY_PLACEHOLDER", viewModel),
                     isPassword = !showKey,
                     trailingAction = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1175,7 +1176,7 @@ fun AddCustomServerForm(
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("CANCEL", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(localizedString("CANCEL", viewModel), fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 }
 
                 Button(
@@ -1199,7 +1200,7 @@ fun AddCustomServerForm(
                 ) {
                     Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("SAVE SERVER", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    Text(localizedString("SAVE_SERVER", viewModel), fontSize = 11.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                 }
             }
         }
@@ -1211,7 +1212,7 @@ fun AddCustomServerForm(
 // -------------------------------------------------------------
 
 @Composable
-fun ConnectionStatusBanner(status: TestStatus) {
+fun ConnectionStatusBanner(status: TestStatus, viewModel: MainViewModel) {
     val (bgColor, borderColor, textColor, icon, message) = when (status) {
         is TestStatus.Success -> arrayOf(
             Color(0x2610B981),
@@ -1232,7 +1233,7 @@ fun ConnectionStatusBanner(status: TestStatus) {
             Color(0xFF38BDF8),
             Color(0xFF7DD3FC),
             Icons.Default.Speed,
-            "Testing connection..."
+            localizedString("TESTING_CONNECTION", viewModel)
         )
     }
 

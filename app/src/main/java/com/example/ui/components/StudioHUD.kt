@@ -58,6 +58,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import android.widget.Toast
+import com.example.ui.localizedString
+import com.example.ui.getLineHeight
+import com.example.ui.Localization
 
 @Composable
 fun SparklineWaveformGraph(
@@ -119,6 +122,7 @@ fun ProTelemetryHeader(
     onSettingsClick: () -> Unit,
     onDestinationsClick: () -> Unit,
     onTelemetryClick: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "hudPulse")
@@ -140,10 +144,10 @@ fun ProTelemetryHeader(
     }
 
     val statusText = when {
-        isPaused -> "PAUSED"
-        isLive && fps > 0 && bitrate > 0 -> "LIVE ${formatTime(streamTime)}"
-        isLive -> "CONNECTING"
-        else -> "READY"
+        isPaused -> localizedString("PAUSED", viewModel)
+        isLive && fps > 0 && bitrate > 0 -> "${localizedString("LIVE", viewModel)} ${formatTime(streamTime)}"
+        isLive -> localizedString("CONNECTING", viewModel)
+        else -> localizedString("READY", viewModel)
     }
 
     Surface(
@@ -211,7 +215,7 @@ fun ProTelemetryHeader(
                 TelemetryChip(
                     icon = null,
                     iconTint = Color.Transparent,
-                    text = "${if (fps > 0) fps else 30} FPS",
+                    text = "${if (fps > 0) fps else 30} ${localizedString("FPS", viewModel)}",
                     valueColor = Color.White.copy(alpha = 0.9f)
                 )
 
@@ -219,7 +223,7 @@ fun ProTelemetryHeader(
                 TelemetryChip(
                     icon = null,
                     iconTint = Color.Transparent,
-                    text = "DROP ${String.format(Locale.US, "%.1f", droppedFramesPercent)}%",
+                    text = "${localizedString("DROP", viewModel)} ${String.format(Locale.US, "%.1f", droppedFramesPercent)}%",
                     valueColor = if (droppedFramesPercent > 2f) CrimsonRed else Color.White.copy(alpha = 0.6f)
                 )
 
@@ -308,7 +312,8 @@ fun DynamicIslandHUD(
     onToggleRecord: () -> Unit = {},
     onSettingsClick: () -> Unit,
     onDestinationsClick: () -> Unit,
-    onTelemetryClick: () -> Unit
+    onTelemetryClick: () -> Unit,
+    viewModel: MainViewModel
 ) {
     ProTelemetryHeader(
         isLive = isLive,
@@ -321,7 +326,8 @@ fun DynamicIslandHUD(
         onToggleRecord = onToggleRecord,
         onSettingsClick = onSettingsClick,
         onDestinationsClick = onDestinationsClick,
-        onTelemetryClick = onTelemetryClick
+        onTelemetryClick = onTelemetryClick,
+        viewModel = viewModel
     )
 }
 
@@ -353,6 +359,7 @@ fun MultiSceneSelectorBar(
     activeSceneId: String,
     onSelectScene: (String) -> Unit,
     onAddScene: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -373,6 +380,21 @@ fun MultiSceneSelectorBar(
         ) {
             scenes.forEach { scene ->
                 val isSelected = scene.id == activeSceneId
+                val displayTitle = when (scene.type) {
+                    MainViewModel.SceneType.MAIN_LIVE -> localizedString("MAIN_LIVE", viewModel)
+                    MainViewModel.SceneType.STARTING_SOON -> localizedString("STARTING_SOON", viewModel)
+                    MainViewModel.SceneType.BE_RIGHT_BACK -> localizedString("BE_RIGHT_BACK", viewModel)
+                    MainViewModel.SceneType.JUST_CHATTING -> localizedString("JUST_CHATTING", viewModel)
+                    MainViewModel.SceneType.CUSTOM -> {
+                        when (scene.title) {
+                            "Main Live" -> localizedString("MAIN_LIVE", viewModel)
+                            "Starting Soon" -> localizedString("STARTING_SOON", viewModel)
+                            "Be Right Back" -> localizedString("BE_RIGHT_BACK", viewModel)
+                            "Just Chatting" -> localizedString("JUST_CHATTING", viewModel)
+                            else -> scene.title
+                        }
+                    }
+                }
                 Surface(
                     onClick = { onSelectScene(scene.id) },
                     color = if (isSelected) CyberCyan.copy(alpha = 0.2f) else Color.Transparent,
@@ -386,10 +408,11 @@ fun MultiSceneSelectorBar(
                         Text(scene.icon, fontSize = 12.sp)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = scene.title,
+                            text = displayTitle,
                             color = if (isSelected) CyberCyan else Color.White.copy(alpha = 0.7f),
                             fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold
+                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold,
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
                 }
@@ -408,7 +431,7 @@ fun MultiSceneSelectorBar(
                 ) {
                     Icon(Icons.Default.Add, null, tint = CyberCyan, modifier = Modifier.size(13.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("+ Scene", color = CyberCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(localizedString("ADD_SCENE_BTN", viewModel), color = CyberCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 }
             }
         }
@@ -420,6 +443,7 @@ fun FramelessLiveChatOverlay(
     messages: List<MainViewModel.ChatMessage>,
     onPinComment: (MainViewModel.ChatMessage) -> Unit,
     onOpenChatHub: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     if (messages.isEmpty()) {
@@ -437,10 +461,11 @@ fun FramelessLiveChatOverlay(
                 Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(CyberCyan))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "💬 Chat Connected • Waiting for messages...",
+                    text = localizedString("CHAT_WAITING", viewModel),
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = getLineHeight(viewModel)
                 )
             }
         }
@@ -650,6 +675,7 @@ fun SceneBroadcastOverlay(
 
 @Composable
 fun AddSceneDialog(
+    viewModel: MainViewModel,
     onAddScene: (title: String, icon: String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -660,17 +686,18 @@ fun AddSceneDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF090D16),
-        title = { Text("CREATE NEW LIVE SCENE", color = Color.White, fontWeight = FontWeight.Black, fontSize = 16.sp) },
+        title = { Text(localizedString("CREATE_NEW_LIVE_SCENE", viewModel), color = Color.White, fontWeight = FontWeight.Black, fontSize = 16.sp, lineHeight = getLineHeight(viewModel)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 GlassTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = "SCENE NAME (e.g. Gaming / Highlights)",
+                    label = localizedString("SCENE_NAME_LABEL", viewModel),
+                    placeholder = localizedString("SCENE_NAME_PLACEHOLDER", viewModel),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Text("CHOOSE ICON", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("CHOOSE_ICON", viewModel), color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -703,12 +730,12 @@ fun AddSceneDialog(
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = CyberCyan)
             ) {
-                Text("ADD SCENE", color = Color.Black, fontWeight = FontWeight.Black)
+                Text(localizedString("ADD_SCENE", viewModel), color = Color.Black, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("CANCEL", color = Color.Gray, fontWeight = FontWeight.Bold)
+                Text(localizedString("CANCEL", viewModel), color = Color.Gray, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
             }
         }
     )
@@ -790,13 +817,14 @@ fun Tier1SourceAndCanvasBar(
     onSelectAspect: (AspectRatioMode) -> Unit,
     canvasScaleMode: MainViewModel.CanvasScaleMode,
     onToggleScaleMode: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     val sources = listOf(
-        Pair(StreamSource.CAMERA, "🎥 CAM"),
-        Pair(StreamSource.M3U8, "🔗 M3U8 URL"),
-        Pair(StreamSource.SCREEN, "📱 SCREEN"),
-        Pair(StreamSource.AUDIO, "🎵 AUDIO")
+        Pair(StreamSource.CAMERA, localizedString("CAM", viewModel)),
+        Pair(StreamSource.M3U8, localizedString("M3U8", viewModel)),
+        Pair(StreamSource.SCREEN, localizedString("SCREEN", viewModel)),
+        Pair(StreamSource.AUDIO, localizedString("AUDIO", viewModel))
     )
 
     val aspects = listOf(
@@ -892,10 +920,11 @@ fun Tier1SourceAndCanvasBar(
                     )
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
-                        text = canvasScaleMode.name,
+                        text = if (canvasScaleMode == MainViewModel.CanvasScaleMode.STRETCH) localizedString("FILL", viewModel) else localizedString("FIT", viewModel),
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1
                     )
                 }
             }
@@ -907,6 +936,7 @@ fun Tier1SourceAndCanvasBar(
 fun MicAudioLevelButton(
     isMicOn: Boolean,
     audioLevel: Float,
+    viewModel: MainViewModel,
     onClick: () -> Unit
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "micPulse")
@@ -937,7 +967,7 @@ fun MicAudioLevelButton(
     ) {
         Box(
             modifier = Modifier
-                .size(42.dp)
+                .size(44.dp)
                 .clip(CircleShape)
                 .background(Color.White.copy(alpha = 0.06f))
                 .border(2.dp, ringColor.copy(alpha = if (isMicOn) (0.5f + 0.5f * activeLevel) else 0.7f), CircleShape),
@@ -950,12 +980,15 @@ fun MicAudioLevelButton(
                 modifier = Modifier.size(20.dp)
             )
         }
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(3.dp))
         Text(
-            if (isMicOn) "MIC ON" else "MUTED",
+            if (isMicOn) localizedString("MIC_ON", viewModel) else localizedString("MIC_OFF", viewModel),
             color = if (isMicOn) Color(0xFF10B981) else CrimsonRed,
-            fontSize = 8.sp,
-            fontWeight = FontWeight.Black
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            softWrap = false,
+            lineHeight = getLineHeight(viewModel)
         )
     }
 }
@@ -966,6 +999,7 @@ fun DockIconButton(
     label: String,
     tint: Color,
     badgeCount: Int = 0,
+    viewModel: MainViewModel,
     onClick: () -> Unit
 ) {
     Column(
@@ -978,7 +1012,7 @@ fun DockIconButton(
     ) {
         Box(
             modifier = Modifier
-                .size(42.dp)
+                .size(44.dp)
                 .clip(CircleShape)
                 .background(Color.White.copy(alpha = 0.06f))
                 .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape),
@@ -1003,12 +1037,15 @@ fun DockIconButton(
                 }
             }
         }
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(3.dp))
         Text(
             label,
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 8.sp,
-            fontWeight = FontWeight.Bold
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            softWrap = false,
+            lineHeight = getLineHeight(viewModel)
         )
     }
 }
@@ -1017,6 +1054,7 @@ fun DockIconButton(
 fun CenterBroadcastControl(
     isLive: Boolean,
     isPaused: Boolean,
+    viewModel: MainViewModel,
     onGoLive: () -> Unit,
     onTogglePause: () -> Unit
 ) {
@@ -1057,11 +1095,12 @@ fun CenterBroadcastControl(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "GO LIVE",
+                    text = localizedString("GO_LIVE", viewModel),
                     color = Color.White,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 0.5.sp
+                    letterSpacing = 0.5.sp,
+                    lineHeight = getLineHeight(viewModel)
                 )
             }
         }
@@ -1080,7 +1119,7 @@ fun CenterBroadcastControl(
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(
                         if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = if (isPaused) "Resume" else "Pause",
+                        contentDescription = if (isPaused) localizedString("PAUSE", viewModel) else localizedString("PAUSE", viewModel),
                         tint = if (isPaused) Color.Black else Color(0xFFF59E0B),
                         modifier = Modifier.size(20.dp)
                     )
@@ -1111,11 +1150,12 @@ fun CenterBroadcastControl(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "STOP",
+                        text = localizedString("STOP", viewModel),
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 0.5.sp
+                        letterSpacing = 0.5.sp,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
             }
@@ -1136,12 +1176,13 @@ fun ErgonomicBroadcastDock(
     onOpenLayers: () -> Unit,
     onOpenDestinations: () -> Unit,
     activeDestinationsCount: Int = 0,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .height(68.dp),
+            .height(88.dp),
         color = Color(0xF20B0F19),
         shape = RoundedCornerShape(28.dp),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
@@ -1150,42 +1191,48 @@ fun ErgonomicBroadcastDock(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp)
+                .padding(top = 6.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             MicAudioLevelButton(
                 isMicOn = isMicOn,
                 audioLevel = audioLevel,
+                viewModel = viewModel,
                 onClick = onToggleMic
             )
 
             DockIconButton(
                 icon = Icons.Default.GraphicEq,
-                label = "MIXER",
+                label = localizedString("MIXER", viewModel),
                 tint = Color.White.copy(alpha = 0.9f),
+                viewModel = viewModel,
                 onClick = onOpenMixer
             )
 
             CenterBroadcastControl(
                 isLive = isLive,
                 isPaused = isPaused,
+                viewModel = viewModel,
                 onGoLive = onGoLive,
                 onTogglePause = onTogglePause
             )
 
             DockIconButton(
                 icon = Icons.Default.AutoAwesome,
-                label = "LAYERS",
+                label = localizedString("LAYERS", viewModel),
                 tint = CyberCyan,
+                viewModel = viewModel,
                 onClick = onOpenLayers
             )
 
             DockIconButton(
                 icon = Icons.Default.Podcasts,
-                label = "DESTS",
+                label = localizedString("DESTS", viewModel),
                 tint = Color(0xFF10B981),
                 badgeCount = activeDestinationsCount,
+                viewModel = viewModel,
                 onClick = onOpenDestinations
             )
         }
@@ -1195,7 +1242,8 @@ fun ErgonomicBroadcastDock(
 @Composable
 fun SourceSelectorPill(
     currentSource: StreamSource,
-    onSelect: (StreamSource) -> Unit
+    onSelect: (StreamSource) -> Unit,
+    viewModel: MainViewModel
 ) {
     Tier1SourceAndCanvasBar(
         currentSource = currentSource,
@@ -1203,7 +1251,8 @@ fun SourceSelectorPill(
         currentAspect = AspectRatioMode.PORTRAIT_9_16,
         onSelectAspect = {},
         canvasScaleMode = MainViewModel.CanvasScaleMode.FIT,
-        onToggleScaleMode = {}
+        onToggleScaleMode = {},
+        viewModel = viewModel
     )
 }
 
@@ -1218,7 +1267,8 @@ fun CurvedControlDock(
     onToggleMic: () -> Unit,
     onOpenMixer: () -> Unit,
     onOpenBackground: () -> Unit,
-    onToggleChat: () -> Unit
+    onToggleChat: () -> Unit,
+    viewModel: MainViewModel
 ) {
     ErgonomicBroadcastDock(
         isLive = isLive,
@@ -1229,7 +1279,8 @@ fun CurvedControlDock(
         onGoLive = onGoLive,
         onTogglePause = onTogglePause,
         onOpenLayers = onOpenBackground,
-        onOpenDestinations = onToggleChat
+        onOpenDestinations = onToggleChat,
+        viewModel = viewModel
     )
 }
 
@@ -1354,6 +1405,7 @@ fun PrecisionMixerChannel(
     onToggleMute: () -> Unit,
     meterLevel: Float,
     channelColor: Color = CyberCyan,
+    viewModel: MainViewModel,
     subControls: @Composable (() -> Unit)? = null
 ) {
     Surface(
@@ -1384,12 +1436,12 @@ fun PrecisionMixerChannel(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
-                        Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                        Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         Text(
                             if (isMuted) "MUTED" else "ONLINE",
                             color = if (isMuted) CrimsonRed else Color(0xFF10B981),
                             fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -1411,19 +1463,24 @@ fun PrecisionMixerChannel(
                         )
                     }
 
-                    // Mute Button
+                    // Mute Button (Fixed Horizontal Pill)
                     Surface(
                         onClick = onToggleMute,
                         color = if (isMuted) CrimsonRed else Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, if (isMuted) CrimsonRed else Color.White.copy(alpha = 0.15f))
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.dp, if (isMuted) CrimsonRed else Color.White.copy(alpha = 0.15f)),
+                        modifier = Modifier.widthIn(min = 64.dp)
                     ) {
                         Text(
-                            text = if (isMuted) "UNMUTE" else "MUTE",
+                            text = if (isMuted) localizedString("UNMUTE", viewModel) else localizedString("MUTE", viewModel),
                             color = if (isMuted) Color.White else Color.White.copy(alpha = 0.8f),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
                 }
@@ -1482,17 +1539,18 @@ fun AudioMixerSheet(
         ) {
             Column {
                 Text(
-                    "BROADCAST AUDIO CONSOLE",
+                    localizedString("AUDIO_MIXER", viewModel),
                     color = Color.White,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 0.5.sp
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
                 Text(
-                    "3-CHANNEL MULTI-BUS & SFX SAMPLER",
-                    color = CyberCyan.copy(alpha = 0.8f),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
+                    localizedString("AUDIO_MIXER_SUB", viewModel),
+                    color = Color(0xFF94A3B8),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Surface(
@@ -1512,14 +1570,15 @@ fun AudioMixerSheet(
         // 1. Microphone Channel
         val micLevel = (uiState.audioLevelL + uiState.audioLevelR) / 2f
         PrecisionMixerChannel(
-            title = "CH 1 • MICROPHONE INPUT",
+            title = localizedString("CH_MIC", viewModel),
             icon = Icons.Default.Mic,
             volume = uiState.micVolume,
             onVolumeChange = { viewModel.setMicVolume(it) },
             isMuted = !uiState.isMicEnabled,
             onToggleMute = { viewModel.toggleMic(!uiState.isMicEnabled) },
             meterLevel = micLevel,
-            channelColor = CyberCyan
+            channelColor = CyberCyan,
+            viewModel = viewModel
         ) {
             // Mic DSP Toggles
             Row(
@@ -1536,7 +1595,7 @@ fun AudioMixerSheet(
                 )
                 // Noise Gate
                 FilterToggleChip(
-                    label = "NOISE GATE",
+                    label = localizedString("NOISE_GATE_LABEL", viewModel),
                     isActive = uiState.isNoiseGateEnabled,
                     activeColor = CyberCyan,
                     onClick = { viewModel.toggleNoiseGate() },
@@ -1544,7 +1603,7 @@ fun AudioMixerSheet(
                 )
                 // Echo Cancellation
                 FilterToggleChip(
-                    label = "ECHO CANCEL",
+                    label = localizedString("ECHO_CANCEL_LABEL", viewModel),
                     isActive = uiState.isEchoCancellationEnabled,
                     activeColor = Color(0xFFA855F7),
                     onClick = { viewModel.toggleEchoCancellation() },
@@ -1558,14 +1617,15 @@ fun AudioMixerSheet(
             (uiState.m3u8Volume * 0.75f).coerceIn(0f, 1f)
         } else 0f
         PrecisionMixerChannel(
-            title = "CH 2 • M3U8 / MEDIA STREAM",
+            title = localizedString("CH_STREAM", viewModel),
             icon = Icons.Default.Podcasts,
             volume = uiState.m3u8Volume,
             onVolumeChange = { viewModel.setM3u8Volume(it) },
             isMuted = uiState.isM3u8Muted,
             onToggleMute = { viewModel.toggleM3u8Mute() },
             meterLevel = mediaSimLevel,
-            channelColor = Color(0xFF38BDF8)
+            channelColor = Color(0xFF38BDF8),
+            viewModel = viewModel
         ) {
             // Audio Sync Delay Slider (-500ms to +500ms)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1574,7 +1634,7 @@ fun AudioMixerSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("AUDIO SYNC DELAY", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(localizedString("SYNC_DELAY", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                     Text(
                         text = if (uiState.m3u8AudioDelayMs == 0) "0ms (PERFECT SYNC)" else "${if (uiState.m3u8AudioDelayMs > 0) "+" else ""}${uiState.m3u8AudioDelayMs}ms",
                         color = if (uiState.m3u8AudioDelayMs == 0) Color(0xFF10B981) else CyberCyan,
@@ -1602,14 +1662,15 @@ fun AudioMixerSheet(
             (uiState.bgMusicVolume * 0.65f).coerceIn(0f, 1f)
         } else 0f
         PrecisionMixerChannel(
-            title = "CH 3 • BACKGROUND MUSIC LOOP",
+            title = localizedString("CH_BGM", viewModel),
             icon = Icons.Default.MusicNote,
             volume = uiState.bgMusicVolume,
             onVolumeChange = { viewModel.setBgMusicVolume(it) },
             isMuted = uiState.isBgMusicMuted,
             onToggleMute = { viewModel.toggleBgMusicMute() },
             meterLevel = bgMusicSimLevel,
-            channelColor = Color(0xFFA855F7)
+            channelColor = Color(0xFFA855F7),
+            viewModel = viewModel
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1635,15 +1696,14 @@ fun AudioMixerSheet(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            if (uiState.isBgMusicPlaying) "PLAYING" else "PLAY",
+                            if (uiState.isBgMusicPlaying) localizedString("PAUSE", viewModel) else localizedString("LIVE", viewModel).take(4), // Using LIVE as PLAY for now or add PLAY to dict
                             color = if (uiState.isBgMusicPlaying) Color.Black else Color.White,
                             fontSize = 10.sp,
-                            fontWeight = FontWeight.Black
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
                 }
-
-                // Pick Local MP3 button
+                // Pick Audio / MP3 File button
                 Surface(
                     onClick = { audioFilePicker.launch("audio/*") },
                     color = Color.White.copy(alpha = 0.08f),
@@ -1654,9 +1714,15 @@ fun AudioMixerSheet(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.FolderOpen, null, tint = Color(0xFFA855F7), modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.AudioFile, null, tint = Color.White, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("LOAD MP3", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            localizedString("PICK_AUDIO", viewModel),
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            lineHeight = getLineHeight(viewModel)
+                        )
                     }
                 }
 
@@ -1689,7 +1755,7 @@ fun AudioMixerSheet(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "AUDIO DUCKING",
+                            localizedString("AUDIO_DUCKING", viewModel),
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Black
@@ -1782,7 +1848,7 @@ fun AudioMixerSheet(
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         Button(
             onClick = onDismiss,
@@ -1864,6 +1930,7 @@ fun GlassChatOverlay(
     messages: List<com.example.ui.MainViewModel.ChatMessage>,
     onPinComment: (com.example.ui.MainViewModel.ChatMessage) -> Unit,
     onOpenChatHub: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -1892,7 +1959,7 @@ fun GlassChatOverlay(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(CyberCyan))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("LIVE CHAT", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    Text(localizedString("LIVE_CHAT", viewModel), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                 }
                 IconButton(onClick = onOpenChatHub, modifier = Modifier.size(20.dp)) {
                     Icon(Icons.Default.Settings, "Chat Hub", tint = CyberCyan, modifier = Modifier.size(12.dp))
@@ -2204,7 +2271,7 @@ fun M3u8GlassSheet(
         ) {
             Column {
                 Text(
-                    "PRO REMOTE STREAM MANAGER",
+                    localizedString("REMOTE_MANAGER", viewModel),
                     color = Color.White,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Black,
@@ -2844,6 +2911,7 @@ fun DestinationsGlassSheet(
     onResetPlatform: (String) -> Unit,
     onAddCustom: () -> Unit,
     onDeleteCustom: (String) -> Unit,
+    viewModel: MainViewModel,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -2945,17 +3013,19 @@ fun DestinationsGlassSheet(
         ) {
             Column {
                 Text(
-                    "DESTINATIONS HUB",
+                    localizedString("STREAM_DESTINATIONS", viewModel),
                     color = Color.White,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 0.5.sp
+                    letterSpacing = 0.5.sp,
+                    lineHeight = getLineHeight(viewModel)
                 )
                 Text(
-                    "MULTI-RTMP PARALLEL BROADCASTING",
+                    localizedString("STREAM_DESTINATIONS_SUB", viewModel),
                     color = CyberCyan.copy(alpha = 0.8f),
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = getLineHeight(viewModel)
                 )
             }
             Surface(
@@ -3001,7 +3071,7 @@ fun DestinationsGlassSheet(
                     ) {
                         Icon(Icons.Default.Save, null, tint = Color(0xFF10B981), modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("EXPORT BACKUP", color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(localizedString("EXPORT_BACKUP", viewModel), color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                     }
                 }
 
@@ -3020,7 +3090,7 @@ fun DestinationsGlassSheet(
                     ) {
                         Icon(Icons.Default.Restore, null, tint = CyberCyan, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("RESTORE BACKUP", color = CyberCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(localizedString("RESTORE_BACKUP", viewModel), color = CyberCyan, fontSize = 10.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                     }
                 }
 
@@ -3039,7 +3109,7 @@ fun DestinationsGlassSheet(
                     ) {
                         Icon(Icons.Default.Add, null, tint = Color(0xFFA855F7), modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("+ CUSTOM RTMP", color = Color(0xFFA855F7), fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(localizedString("ADD_CUSTOM_RTMP_BTN", viewModel), color = Color(0xFFA855F7), fontSize = 10.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                     }
                 }
             }
@@ -3055,6 +3125,7 @@ fun DestinationsGlassSheet(
                 diagnosticMessage = diagnosticMessage,
                 onToggle = { onToggle(ep.id, it) },
                 onSaveCredentials = { url, key -> onSaveCredentials(ep.id, url, key) },
+                viewModel = viewModel,
                 onResetDefault = if (!ep.isCustom) { { onResetPlatform(ep.id) } } else null,
                 onDelete = if (ep.isCustom) { { onDeleteCustom(ep.id) } } else null
             )
@@ -3070,7 +3141,7 @@ fun DestinationsGlassSheet(
             colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
             shape = RoundedCornerShape(14.dp)
         ) {
-            Text("DONE", color = Color.Black, fontWeight = FontWeight.Black)
+            Text(localizedString("DONE", viewModel), color = Color.Black, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
         }
     }
 }
@@ -3084,6 +3155,7 @@ fun DestinationGlassCard(
     diagnosticMessage: String,
     onToggle: (Boolean) -> Unit,
     onSaveCredentials: (String, String) -> Unit,
+    viewModel: MainViewModel,
     onResetDefault: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null
 ) {
@@ -3125,16 +3197,16 @@ fun DestinationGlassCard(
 
     if (isStreaming && endpoint.isEnabled) {
         if (isAutoReconnecting) {
-            statusText = "Auto-Reconnecting..."
+            statusText = localizedString("AUTO_RECONNECTING", viewModel)
             statusColor = Color(0xFFF59E0B)
             isLiveActive = false
         } else if (fps > 0) {
             val effBitrate = if (currentBitrate > 0) currentBitrate else 4500
-            statusText = "Live $effBitrate kbps"
+            statusText = "${localizedString("LIVE", viewModel)} $effBitrate kbps"
             statusColor = Color(0xFF10B981)
             isLiveActive = true
         } else {
-            statusText = "Connecting..."
+            statusText = localizedString("CONNECTING", viewModel)
             statusColor = Color(0xFFF59E0B)
             isLiveActive = false
         }
@@ -3142,14 +3214,14 @@ fun DestinationGlassCard(
         isLiveActive = false
         if (endpoint.isEnabled) {
             if (endpoint.streamKey.isNotBlank()) {
-                statusText = "READY"
+                statusText = localizedString("READY", viewModel)
                 statusColor = Color(0xFF10B981)
             } else {
-                statusText = "KEY REQUIRED"
+                statusText = localizedString("KEY_REQUIRED", viewModel)
                 statusColor = Color(0xFFF59E0B)
             }
         } else {
-            statusText = "DISABLED"
+            statusText = localizedString("DISABLED", viewModel)
             statusColor = Color.Gray
         }
     }
@@ -3257,10 +3329,10 @@ fun DestinationGlassCard(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("RTMP SERVER INGEST URL", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("RTMP_INGEST_URL", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                 if (onResetDefault != null) {
                                     Text(
-                                        text = "RESET DEFAULT",
+                                        text = localizedString("RESET_DEFAULT", viewModel),
                                         color = CyberCyan,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
@@ -3299,7 +3371,7 @@ fun DestinationGlassCard(
 
                         // Stream Key input
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("STREAM KEY", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            Text(localizedString("STREAM_KEY", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                             OutlinedTextField(
                                 value = keyInput,
                                 onValueChange = { keyInput = it },
@@ -3351,7 +3423,7 @@ fun DestinationGlassCard(
                                 ) {
                                     Icon(Icons.Default.Delete, null, tint = CrimsonRed, modifier = Modifier.size(14.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("DELETE", color = CrimsonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(localizedString("DELETE", viewModel), color = CrimsonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                 }
                             }
 
@@ -3367,7 +3439,7 @@ fun DestinationGlassCard(
                             ) {
                                 Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("SAVE CREDENTIALS", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                Text(localizedString("SAVE_CREDENTIALS", viewModel), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                             }
                         }
                     }
@@ -3439,9 +3511,12 @@ fun SettingsGlassSheet(
     onTickerToggle: (Boolean) -> Unit,
     isScoreboardEnabled: Boolean,
     onScoreboardToggle: (Boolean) -> Unit,
+    viewModel: MainViewModel,
     onDismiss: () -> Unit
 ) {
     var bitrateVal by remember(config.videoBitrateKbps) { mutableFloatStateOf(config.videoBitrateKbps.toFloat()) }
+    val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
@@ -3459,17 +3534,18 @@ fun SettingsGlassSheet(
         ) {
             Column {
                 Text(
-                    "PRO BROADCAST SETTINGS",
+                    localizedString("STREAM_SETTINGS", viewModel),
                     color = Color.White,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 0.5.sp
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
                 Text(
-                    "ENCODER, GOP & CRASH-PROOF PIPELINES",
-                    color = CyberCyan.copy(alpha = 0.8f),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
+                    localizedString("STREAM_SETTINGS_SUB", viewModel),
+                    color = Color(0xFF94A3B8),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Surface(
@@ -3486,10 +3562,21 @@ fun SettingsGlassSheet(
             }
         }
 
+        // Language Switcher (Segmented Glass Pill)
+        GlassSectionCard(title = localizedString("APP_LANGUAGE", viewModel)) {
+            PillSelector(
+                options = listOf("🇪🇬 العربية", "🇺🇸 English"),
+                selectedIndex = if (uiState.appLang == "ar") 0 else 1,
+                onSelect = { idx ->
+                    viewModel.setAppLang(context, if (idx == 0) "ar" else "en")
+                }
+            )
+        }
+
         // 1. Resolution & Orientation Card
-        GlassSectionCard(title = "RESOLUTION & ORIENTATION") {
+        GlassSectionCard(title = localizedString("RESOLUTION", viewModel)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("BROADCAST RESOLUTION", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("BROADCAST_RES", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 PillSelector(
                     options = listOf("1080p FHD", "720p HD", "480p SD"),
                     selectedIndex = when (config.videoQuality) {
@@ -3507,9 +3594,9 @@ fun SettingsGlassSheet(
                     }
                 )
 
-                Text("STAGE ORIENTATION", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("STAGE_ORIENT", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 PillSelector(
-                    options = listOf("Landscape (16:9)", "Portrait (9:16)"),
+                    options = listOf(localizedString("LANDSCAPE", viewModel), localizedString("PORTRAIT", viewModel)),
                     selectedIndex = if (config.aspectRatio == AspectRatioMode.LANDSCAPE_16_9) 0 else 1,
                     onSelect = { idx ->
                         val ratio = if (idx == 0) AspectRatioMode.LANDSCAPE_16_9 else AspectRatioMode.PORTRAIT_9_16
@@ -3520,11 +3607,11 @@ fun SettingsGlassSheet(
         }
 
         // 2. Framerate & Keyframe Cadence Card
-        GlassSectionCard(title = "FRAMERATE & KEYFRAME INTERVAL") {
+        GlassSectionCard(title = localizedString("FRAMERATE", viewModel)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("OUTPUT FRAMERATE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("OUTPUT_FPS", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 PillSelector(
-                    options = listOf("30 FPS (Standard)", "60 FPS (Smooth Pro)"),
+                    options = listOf(localizedString("FPS_30", viewModel), localizedString("FPS_60", viewModel)),
                     selectedIndex = if (config.targetFps == 60) 1 else 0,
                     onSelect = { idx ->
                         val fps = if (idx == 1) 60 else 30
@@ -3551,15 +3638,17 @@ fun SettingsGlassSheet(
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
-                                "KEYFRAME INTERVAL: GOP = 2.0s (LOCKED)",
+                                localizedString("KEYFRAME_INT", viewModel),
                                 color = Color.White,
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Black
+                                fontWeight = FontWeight.Black,
+                                lineHeight = getLineHeight(viewModel)
                             )
                             Text(
-                                "Mandatory 2-second keyframe cadence strictly enforced for Twitch, YouTube & Telegram live delivery.",
+                                localizedString("KEYFRAME_DESC", viewModel),
                                 color = Color.White.copy(alpha = 0.5f),
-                                fontSize = 9.sp
+                                fontSize = 9.sp,
+                                lineHeight = getLineHeight(viewModel)
                             )
                         }
                     }
@@ -3568,14 +3657,14 @@ fun SettingsGlassSheet(
         }
 
         // 3. Bitrate & Adaptive Bitrate (ABR) Card
-        GlassSectionCard(title = "BITRATE & ADAPTIVE STREAMING (ABR)") {
+        GlassSectionCard(title = localizedString("BITRATE", viewModel)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("TARGET VIDEO BITRATE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(localizedString("TARGET_BITRATE", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                     Text(
                         "${bitrateVal.toInt()} kbps",
                         color = CyberCyan,
@@ -3625,24 +3714,25 @@ fun SettingsGlassSheet(
                 Spacer(modifier = Modifier.height(2.dp))
 
                 FeatureToggleRow(
-                    title = "ADAPTIVE BITRATE (ABR)",
+                    title = localizedString("ABR", viewModel),
                     checked = config.isAdaptiveBitrateEnabled,
                     onCheckedChange = { onConfigChange(config.copy(isAdaptiveBitrateEnabled = it)) }
                 )
                 Text(
-                    "Automatically lowers bitrate if network bandwidth drops, preventing stream buffer stalls or disconnects.",
+                    localizedString("ABR_DESC", viewModel),
                     color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 9.sp
+                    fontSize = 9.sp,
+                    lineHeight = getLineHeight(viewModel)
                 )
             }
         }
 
         // 4. Hardware Encoder Engine & System Card
-        GlassSectionCard(title = "ENCODER ENGINE & SYSTEM SERVICE") {
+        GlassSectionCard(title = localizedString("HW_ACCEL", viewModel)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("ENCODER BACKEND", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(localizedString("ENCODER_BACKEND", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 PillSelector(
-                    options = listOf("Hardware MediaCodec H.264", "Software x264 (Ultrafast)"),
+                    options = listOf(localizedString("ENC_HW", viewModel), localizedString("ENC_SW", viewModel)),
                     selectedIndex = if (config.encoderEngine == com.example.core.model.EncoderEngine.HARDWARE_MEDIACODEC) 0 else 1,
                     onSelect = { idx ->
                         val engine = if (idx == 0) com.example.core.model.EncoderEngine.HARDWARE_MEDIACODEC else com.example.core.model.EncoderEngine.SOFTWARE_X264
@@ -3651,19 +3741,19 @@ fun SettingsGlassSheet(
                 )
 
                 FeatureToggleRow(
-                    title = "KEEP SCREEN AWAKE",
+                    title = localizedString("KEEP_AWAKE", viewModel),
                     checked = config.keepScreenAwake,
                     onCheckedChange = { onConfigChange(config.copy(keepScreenAwake = it)) }
                 )
 
                 FeatureToggleRow(
-                    title = "BACKGROUND STREAMING SERVICE",
+                    title = localizedString("BG_SERVICE", viewModel),
                     checked = config.backgroundStreamingEnabled,
                     onCheckedChange = { onConfigChange(config.copy(backgroundStreamingEnabled = it)) }
                 )
 
                 FeatureToggleRow(
-                    title = "AAC-LC 128 kbps 44.1 kHz STEREO AUDIO",
+                    title = localizedString("AUDIO_CONFIG", viewModel),
                     checked = true,
                     onCheckedChange = {}
                 )
@@ -3671,20 +3761,20 @@ fun SettingsGlassSheet(
         }
 
         // 5. Broadcast Overlays Shortcuts Card
-        GlassSectionCard(title = "BROADCAST OVERLAYS") {
+        GlassSectionCard(title = localizedString("TAB_OVERLAYS", viewModel)) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 FeatureToggleRow(
-                    title = "WATERMARK LOGO",
+                    title = localizedString("WATERMARK", viewModel),
                     checked = isWatermarkEnabled,
                     onCheckedChange = onWatermarkToggle
                 )
                 FeatureToggleRow(
-                    title = "SCROLLING NEWS TICKER",
+                    title = localizedString("TICKER", viewModel),
                     checked = isTickerEnabled,
                     onCheckedChange = onTickerToggle
                 )
                 FeatureToggleRow(
-                    title = "LIVE MATCH SCOREBOARD",
+                    title = localizedString("SCOREBOARD", viewModel),
                     checked = isScoreboardEnabled,
                     onCheckedChange = onScoreboardToggle
                 )
@@ -3701,7 +3791,7 @@ fun SettingsGlassSheet(
             colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
             shape = RoundedCornerShape(14.dp)
         ) {
-            Text("DONE", color = Color.Black, fontWeight = FontWeight.Black)
+            Text(localizedString("DONE", viewModel), color = Color.Black, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
         }
     }
 }
@@ -3711,5 +3801,188 @@ private fun formatTime(seconds: Long): String {
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return String.format(Locale.US, "%02d:%02d:%02d", h, m, s)
+}
+
+enum class PermissionType {
+    CAMERA,
+    MICROPHONE,
+    NOTIFICATIONS,
+    OVERLAY
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CyberGlassPermissionSheet(
+    permissionType: PermissionType,
+    viewModel: MainViewModel,
+    onGrantRequested: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isAr = viewModel.uiState.collectAsState().value.appLang == "ar"
+
+    val title = when (permissionType) {
+        PermissionType.CAMERA -> if (isAr) "إذن الكاميرا مطلوب" else "Camera Permission Required"
+        PermissionType.MICROPHONE -> if (isAr) "إذن المايكروفون مطلوب" else "Microphone Permission Required"
+        PermissionType.NOTIFICATIONS -> if (isAr) "إذن الإشعارات مطلوب" else "Notifications Permission Required"
+        PermissionType.OVERLAY -> if (isAr) "إذن العرض فوق التطبيقات" else "Draw Over Apps Permission"
+    }
+
+    val description = when (permissionType) {
+        PermissionType.CAMERA -> if (isAr) "نحتاج إذن الكاميرا للتقاط الفيديو والمعاينة الحية للبث المباشر." else "Camera permission is required for live video capture and preview."
+        PermissionType.MICROPHONE -> if (isAr) "نحتاج إذن المايكروفون لنقل صوتك المباشر للجمهور أثناء البث والتسجيل." else "Microphone permission is required for broadcasting and recording live audio."
+        PermissionType.NOTIFICATIONS -> if (isAr) "نحتاج إذن الإشعارات لإظهار حالة البث في الخلفية وشريط التحكم." else "Notifications permission is required to display live status in background."
+        PermissionType.OVERLAY -> if (isAr) "نحتاج إذن العرض فوق التطبيقات لعرض شات البث والـ PIP عائماً." else "Overlay permission is required for floating chat and Picture-in-Picture mode."
+    }
+
+    val icon = when (permissionType) {
+        PermissionType.CAMERA -> Icons.Default.Videocam
+        PermissionType.MICROPHONE -> Icons.Default.Mic
+        PermissionType.NOTIFICATIONS -> Icons.Default.Notifications
+        PermissionType.OVERLAY -> Icons.Default.Layers
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFE090D16),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 6.dp)
+                    .width(36.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(alpha = 0.3f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(CyberCyan.copy(alpha = 0.25f), Color.Transparent)
+                        )
+                    )
+                    .border(1.5.dp, CyberCyan, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null, tint = CyberCyan, modifier = Modifier.size(32.dp))
+            }
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center,
+                    lineHeight = getLineHeight(viewModel)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = description,
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 18.sp
+                )
+            }
+
+            Button(
+                onClick = {
+                    onGrantRequested()
+                    onDismiss()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
+                shape = RoundedCornerShape(14.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
+            ) {
+                Icon(Icons.Default.CheckCircle, null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isAr) "منح الإذن الآن" else "Grant Permission Now",
+                    color = Color.Black,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 14.sp,
+                    lineHeight = getLineHeight(viewModel)
+                )
+            }
+
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Text(
+                    text = if (isAr) "ليس الآن" else "Not Now",
+                    color = Color.Gray,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AmberPermissionBanner(
+    message: String,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = Color(0xF21C1917),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.6f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Icon(Icons.Default.Warning, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = message,
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+                onClick = onRetry,
+                color = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, Color(0xFFF59E0B))
+            ) {
+                Text(
+                    text = "GRANT",
+                    color = Color(0xFFF59E0B),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Default.Close, null, tint = Color.Gray, modifier = Modifier.size(14.dp))
+            }
+        }
+    }
 }
 

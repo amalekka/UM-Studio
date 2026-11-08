@@ -253,8 +253,21 @@ class MainViewModel : ViewModel() {
         val startingSoonTitle: String = "STREAM STARTING SOON",
         val droppedFramesPercent: Float = 0.0f,
         val cpuTemperature: String = "36°C",
-        val batteryLevel: Int = 88
+        val batteryLevel: Int = 88,
+        val appLang: String = "en" // "en" or "ar"
     )
+
+    fun setAppLang(context: Context, lang: String) {
+        val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+        prefs.edit().putString("app_lang", lang).apply()
+        _uiState.value = _uiState.value.copy(appLang = lang)
+    }
+
+    fun initLang(context: Context) {
+        val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+        val lang = prefs.getString("app_lang", "en") ?: "en"
+        _uiState.value = _uiState.value.copy(appLang = lang)
+    }
 
     private var pendingView: OpenGlView? = null
     var cachedMediaProjectionResult: Intent? = null
@@ -621,7 +634,11 @@ class MainViewModel : ViewModel() {
         pendingView = view
         service?.getStreamManager()?.let { manager ->
             manager.setConfig(_uiState.value.streamConfig)
-            manager.initCamera(view)
+            if (_uiState.value.currentSource == StreamSource.CAMERA) {
+                manager.initCamera(view)
+            } else if (_uiState.value.currentSource == StreamSource.SCREEN) {
+                manager.initDisplay(view)
+            }
         }
     }
 
@@ -698,30 +715,35 @@ class MainViewModel : ViewModel() {
         // 1. PRE-FLIGHT VALIDATION
         val ui = _uiState.value
         val validEndpoints = ui.endpoints.filter { it.isEnabled }
+        val isAr = ui.appLang == "ar"
         
         if (validEndpoints.isEmpty()) {
-            Toast.makeText(context, "No broadcast platforms enabled. Please enable at least one in Destinations.", Toast.LENGTH_LONG).show()
+            val msg = if (isAr) "لا توجد منصات بث مفعلة. يرجى تفعيل منصة واحدة على الأقل في الوجهات." else "No broadcast platforms enabled. Please enable at least one in Destinations."
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             return false
         }
         
         val missingKeys = validEndpoints.filter { it.streamKey.isBlank() || it.url.trim().length < 8 }
         if (missingKeys.isNotEmpty()) {
             val names = missingKeys.joinToString(", ") { it.name }
-            Toast.makeText(context, "Missing Stream Key or URL for: $names", Toast.LENGTH_LONG).show()
+            val msg = if (isAr) "مفتاح البث أو رابط السيرفر مفقود لـ: $names" else "Missing Stream Key or URL for: $names"
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             return false
         }
 
         if (ui.currentSource == StreamSource.M3U8) {
             val url = ui.m3u8Url.trim()
             if (url.isBlank() || !(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("rtmp", true))) {
-                Toast.makeText(context, "Invalid Remote Source URL. Must start with http/https/rtmp", Toast.LENGTH_LONG).show()
+                val msg = if (isAr) "رابط البث غير صريح. يجب أن يبدأ بـ http/https/rtmp" else "Invalid Remote Source URL. Must start with http/https/rtmp"
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 return false
             }
         }
 
         val currService = service
         if (currService == null) {
-            Toast.makeText(context, "Streaming Engine is starting. Please wait...", Toast.LENGTH_SHORT).show()
+            val msg = if (isAr) "جاري تشغيل محرك البث. يرجى الانتظار..." else "Streaming Engine is starting. Please wait..."
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             try {
                 val intent = Intent(context, LiveStreamService::class.java)
                 context.startForegroundService(intent)
@@ -1507,22 +1529,39 @@ class MainViewModel : ViewModel() {
     }
 
     fun toggleRecording(context: Context) {
-        val manager = service?.getStreamManager() ?: return
-        if (_uiState.value.isRecording) {
-            manager.stopRecord()
+        val ui = _uiState.value
+        val isAr = ui.appLang == "ar"
+        if (ui.isRecording) {
+            // STOP RECORDING
+            if (ui.currentSource == StreamSource.M3U8) {
+                service?.getRestreamEngine()?.stopRecord()
+            } else {
+                service?.getStreamManager()?.stopRecord()
+            }
             _uiState.value = _uiState.value.copy(isRecording = false)
-            Toast.makeText(context, "Recording saved to device storage", Toast.LENGTH_SHORT).show()
+            val msg = if (isAr) "تم حفظ فيديو MP4 في المعرض (Gallery/Movies)" else "Saved MP4 to Gallery/Movies"
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         } else {
-            val recordDir = File(context.getExternalFilesDir(null) ?: context.filesDir, "Recordings")
+            // START RECORDING
+            val moviesDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES) ?: context.filesDir
+            val recordDir = File(moviesDir, "StudioRecordings")
             if (!recordDir.exists()) recordDir.mkdirs()
             val fileName = "Studio_REC_${System.currentTimeMillis()}.mp4"
             val filePath = File(recordDir, fileName).absolutePath
-            val success = manager.startRecord(filePath)
+            
+            val success = if (ui.currentSource == StreamSource.M3U8) {
+                service?.getRestreamEngine()?.startRecord(filePath) ?: false
+            } else {
+                service?.getStreamManager()?.startRecord(filePath) ?: false
+            }
+            
             if (success) {
                 _uiState.value = _uiState.value.copy(isRecording = true)
-                Toast.makeText(context, "Recording started...", Toast.LENGTH_SHORT).show()
+                val msg = if (isAr) "🔴 بدأ التسجيل المحلي..." else "🔴 Recording started..."
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Failed to start local recording", Toast.LENGTH_SHORT).show()
+                val msg = if (isAr) "فشل بدء التسجيل المحلي (المحرك غير جاهز)" else "Failed to start local recording (Engine not ready)"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
         }
     }

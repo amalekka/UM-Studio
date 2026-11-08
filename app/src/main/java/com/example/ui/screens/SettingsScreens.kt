@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.core.model.AspectRatioMode
 import com.example.core.model.PlatformEndpoint
 import com.example.core.model.VideoCodec
@@ -62,23 +63,27 @@ fun AdvancedSettingsScreen(viewModel: MainViewModel) {
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                "ENGINE", 
-                style = MaterialTheme.typography.headlineSmall, 
-                fontWeight = FontWeight.Black,
-                color = Color.White,
-                letterSpacing = 2.sp
-            )
-            Text(
-                "HW ENCODING", 
-                style = MaterialTheme.typography.labelSmall, 
-                color = Color(0xFF38BDF8)
-            )
+            Column {
+                Text(
+                    "Stream Engine",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Text(
+                    "Hardware encoding & quality settings",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             
             Spacer(modifier = Modifier.height(24.dp))
             
             // Video Quality Card
-            GlassSectionCard(title = "VIDEO QUALITY") {
+            GlassSectionCard(title = "Video Quality") {
                 Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
                     // Resolution Segmented
                     Text("RESOLUTION & FRAME RATE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -129,7 +134,7 @@ fun AdvancedSettingsScreen(viewModel: MainViewModel) {
             
             // Hardware Encoder Card
             GlassSectionCard(
-                title = "HARDWARE ENCODER",
+                title = "Hardware Encoder",
                 trailing = {
                     Box(
                         modifier = Modifier
@@ -154,7 +159,7 @@ fun AdvancedSettingsScreen(viewModel: MainViewModel) {
             Spacer(modifier = Modifier.height(16.dp))
             
             // Pro Features Card
-            GlassSectionCard(title = "PRO OVERLAYS") {
+            GlassSectionCard(title = "Pro Overlays") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     FeatureToggleRow(
                         title = "WATERMARK LOGO",

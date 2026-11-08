@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
+import coil.compose.AsyncImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -57,6 +58,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import com.example.ui.localizedString
+import com.example.ui.getLineHeight
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -100,20 +103,20 @@ fun MainScreen(viewModel: MainViewModel) {
     if (showExitDialog) {
         AlertDialog(
             onDismissRequest = { showExitDialog = false },
-            title = { Text("Exit Application", color = Color.White, fontWeight = FontWeight.Bold) },
-            text = { Text("Do you want to stop streaming, stop background services, and exit the app completely?", color = Color.White.copy(alpha = 0.8f)) },
+            title = { Text(localizedString("EXIT_APP", viewModel), color = Color.White, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel)) },
+            text = { Text(localizedString("EXIT_DESC", viewModel), color = Color.White.copy(alpha = 0.8f), lineHeight = getLineHeight(viewModel)) },
             containerColor = Color(0xFF0D111C),
             confirmButton = {
                 TextButton(onClick = {
                     showExitDialog = false
                     viewModel.shutdownApp(context)
                 }) {
-                    Text("EXIT & STOP", color = Color(0xFFEF4444), fontWeight = FontWeight.Black)
+                    Text(localizedString("STOP", viewModel), color = Color(0xFFEF4444), fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showExitDialog = false }) {
-                    Text("CANCEL", color = Color.Gray, fontWeight = FontWeight.Bold)
+                    Text(localizedString("BACK_TO_STUDIO", viewModel).take(6), color = Color.Gray, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                 }
             }
         )
@@ -134,6 +137,7 @@ fun VideoSourceContent(
     openGlView: OpenGlView,
     m3u8Url: String,
     viewModel: MainViewModel,
+    uiState: MainViewModel.UiState,
     launchScreenCapture: () -> Unit,
     isStreaming: Boolean,
     modifier: Modifier = Modifier
@@ -152,32 +156,53 @@ fun VideoSourceContent(
                             PlayerView(ctx).apply {
                                 player = m3u8Player
                                 useController = false
+                                // Force 9:16 Full-Height Vertical Fill
+                                resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                             }
                         },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
             }
-            StreamSource.SCREEN -> ScreenCapturePreviewCard(
-                isStreaming = isStreaming,
-                isReady = viewModel.cachedMediaProjectionResult != null,
-                onRequestCapture = launchScreenCapture,
-                modifier = Modifier.fillMaxSize()
-            )
+            StreamSource.SCREEN -> {
+                if (viewModel.cachedMediaProjectionResult != null) {
+                    AndroidView(
+                        factory = { openGlView },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    ScreenCapturePreviewCard(
+                        isStreaming = isStreaming,
+                        isReady = false,
+                        onRequestCapture = launchScreenCapture,
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
             StreamSource.AUDIO -> {
                 Box(
                     modifier = Modifier.fillMaxSize().background(Obsidian),
                     contentAlignment = Alignment.Center
                 ) {
+                    if (uiState.bgConfig.imageUri != null) {
+                        AsyncImage(
+                            model = uiState.bgConfig.imageUri,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.Mic, null, tint = CyberCyan.copy(alpha = 0.5f), modifier = Modifier.size(64.dp))
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            "AUDIO ONLY MODE",
+                            localizedString("AUDIO", viewModel),
                             color = Color.White.copy(alpha = 0.4f),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Black,
-                            letterSpacing = 2.sp
+                            letterSpacing = 2.sp,
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
                 }
@@ -205,6 +230,59 @@ fun StudioPreviewScreen(
     var showAddSceneDialog by remember { mutableStateOf(false) }
     val bgSheetState = rememberModalBottomSheetState()
 
+    var pendingPermissionType by remember { mutableStateOf<com.example.ui.components.PermissionType?>(null) }
+    var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var amberBannerMessage by remember { mutableStateOf<String?>(null) }
+
+    val singlePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        try {
+            if (isGranted) {
+                amberBannerMessage = null
+                pendingAction?.invoke()
+            } else {
+                amberBannerMessage = if (uiState.appLang == "ar") {
+                    "⚠️ تم رفض الإذن. يمكنك منحه لاحقاً لتشغيل الميزة."
+                } else {
+                    "⚠️ Permission denied. You can grant it later to use feature."
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("MainScreen", "Permission result error: ${t.message}")
+        } finally {
+            pendingAction = null
+        }
+    }
+
+    val requestPermissionSafely: (com.example.ui.components.PermissionType, () -> Unit) -> Unit = { type, action ->
+        amberBannerMessage = null
+        val permString = when (type) {
+            com.example.ui.components.PermissionType.CAMERA -> android.Manifest.permission.CAMERA
+            com.example.ui.components.PermissionType.MICROPHONE -> android.Manifest.permission.RECORD_AUDIO
+            com.example.ui.components.PermissionType.NOTIFICATIONS -> if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) android.Manifest.permission.POST_NOTIFICATIONS else null
+            com.example.ui.components.PermissionType.OVERLAY -> null
+        }
+
+        if (type == com.example.ui.components.PermissionType.OVERLAY) {
+            if (android.provider.Settings.canDrawOverlays(context)) {
+                action()
+            } else {
+                pendingAction = action
+                pendingPermissionType = com.example.ui.components.PermissionType.OVERLAY
+            }
+        } else if (permString == null) {
+            action()
+        } else {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, permString) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                action()
+            } else {
+                pendingAction = action
+                pendingPermissionType = type
+            }
+        }
+    }
+
     val projectionManager = remember {
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
     }
@@ -214,12 +292,12 @@ fun StudioPreviewScreen(
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
             viewModel.onScreenCapturePermissionGranted(result.data!!)
-            Toast.makeText(context, "Screen Capture permission granted!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, if (uiState.appLang == "ar") "تم منح إذن تصوير الشاشة!" else "Screen Capture permission granted!", Toast.LENGTH_SHORT).show()
             if (uiState.isStreaming) {
                 viewModel.startStream(context, result.data)
             }
         } else {
-            Toast.makeText(context, "Screen Capture permission declined", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, if (uiState.appLang == "ar") "تم رفض إذن تصوير الشاشة" else "Screen Capture permission declined", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -241,6 +319,8 @@ fun StudioPreviewScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            // Force 9:16 Full-Height Vertical Fill
+            setAspectRatioMode(com.pedro.encoder.utils.gl.AspectRatioMode.Fill)
         }
     }
 
@@ -252,20 +332,35 @@ fun StudioPreviewScreen(
                         if (holder.surface?.isValid == true) {
                             viewModel.initPreview(openGlView)
                         }
-                    } catch (e: Exception) {}
+                    } catch (e: Throwable) {
+                        android.util.Log.e("MainScreen", "surfaceCreated initPreview error: ${e.message}")
+                    }
                 }
             }
             override fun surfaceChanged(h: android.view.SurfaceHolder, f: Int, w: Int, h1: Int) {}
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
-                try { viewModel.stopPreview() } catch (e: Exception) {}
+                try {
+                    viewModel.stopPreview()
+                } catch (e: Throwable) {
+                    android.util.Log.e("MainScreen", "surfaceDestroyed stopPreview error: ${e.message}")
+                }
             }
         }
         openGlView.holder.addCallback(callback)
+        if (openGlView.holder.surface?.isValid == true) {
+            try {
+                viewModel.initPreview(openGlView)
+            } catch (e: Throwable) {
+                android.util.Log.e("MainScreen", "initial initPreview error: ${e.message}")
+            }
+        }
         onDispose {
             try {
                 openGlView.holder.removeCallback(callback)
                 viewModel.stopPreview()
-            } catch (e: Exception) {}
+            } catch (e: Throwable) {
+                android.util.Log.e("MainScreen", "onDispose stopPreview error: ${e.message}")
+            }
         }
     }
 
@@ -320,11 +415,22 @@ fun StudioPreviewScreen(
                         }
                     }
             ) {
+                // Background Layer (Image or Preset)
+                if (uiState.bgConfig.imageUri != null) {
+                    AsyncImage(
+                        model = uiState.bgConfig.imageUri,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop // 9:16 Full Vertical Fill
+                    )
+                }
+
                 VideoSourceContent(
                     currentSource = uiState.currentSource,
                     openGlView = openGlView,
                     m3u8Url = uiState.m3u8Url,
                     viewModel = viewModel,
+                    uiState = uiState,
                     launchScreenCapture = launchScreenCapture,
                     isStreaming = uiState.isStreaming,
                     modifier = Modifier.fillMaxSize()
@@ -409,6 +515,7 @@ fun StudioPreviewScreen(
                     openGlView = openGlView,
                     m3u8Url = uiState.m3u8Url,
                     viewModel = viewModel,
+                    uiState = uiState,
                     launchScreenCapture = launchScreenCapture,
                     isStreaming = uiState.isStreaming,
                     modifier = Modifier.fillMaxSize()
@@ -441,14 +548,16 @@ fun StudioPreviewScreen(
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
                             text = when (uiState.streamConfig.aspectRatio) {
-                                AspectRatioMode.LANDSCAPE_16_9 -> "16:9 CINEMA STAGE"
-                                AspectRatioMode.SQUARE_1_1 -> "1:1 SQUARE STAGE"
-                                else -> "CUSTOM BROADCAST STAGE"
+                                AspectRatioMode.LANDSCAPE_16_9 -> localizedString("STAGE_CINEMA", viewModel)
+                                AspectRatioMode.PORTRAIT_9_16 -> localizedString("STAGE_VERTICAL", viewModel)
+                                AspectRatioMode.SQUARE_1_1 -> localizedString("STAGE_SQUARE", viewModel)
+                                else -> localizedString("STAGE_CUSTOM", viewModel)
                             },
                             color = Color.White,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Black,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.sp,
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
                 }
@@ -478,12 +587,17 @@ fun StudioPreviewScreen(
                     cpuTemp = uiState.cpuTemperature,
                     batteryPercent = uiState.batteryLevel,
                     endpoints = uiState.endpoints,
-                    onToggleRecord = { viewModel.toggleRecording(context) },
+                    onToggleRecord = {
+                        requestPermissionSafely(com.example.ui.components.PermissionType.MICROPHONE) {
+                            viewModel.toggleRecording(context)
+                        }
+                    },
                     onSettingsClick = { showSettingsSheet = true },
                     onDestinationsClick = { showDestinationsSheet = true },
                     onTelemetryClick = {
                         Toast.makeText(context, uiState.diagnosticMessage, Toast.LENGTH_SHORT).show()
-                    }
+                    },
+                    viewModel = viewModel
                 )
             }
 
@@ -499,28 +613,40 @@ fun StudioPreviewScreen(
                     // Chat toggle
                     QuickGlassAction(
                         icon = if (isChatVisible) Icons.Default.ChatBubble else Icons.Default.ChatBubbleOutline,
-                        label = if (isChatVisible) "CHAT" else "CHAT OFF",
+                        label = localizedString("CHAT", viewModel),
+                        viewModel = viewModel,
                         onClick = { isChatVisible = !isChatVisible }
                     )
 
                     // Flip camera
                     QuickGlassAction(
                         icon = Icons.Default.FlipCameraAndroid,
-                        label = "FLIP",
-                        onClick = { viewModel.switchCamera() }
+                        label = localizedString("FLIP", viewModel),
+                        viewModel = viewModel,
+                        onClick = {
+                            requestPermissionSafely(com.example.ui.components.PermissionType.CAMERA) {
+                                viewModel.switchCamera()
+                            }
+                        }
                     )
 
                     // Facecam PiP toggle
                     QuickGlassAction(
                         icon = Icons.Default.Face,
-                        label = if (uiState.isFacecamEnabled) "PIP ON" else "PIP",
-                        onClick = { viewModel.setFacecamEnabled(!uiState.isFacecamEnabled) }
+                        label = localizedString("PIP", viewModel),
+                        viewModel = viewModel,
+                        onClick = {
+                            requestPermissionSafely(com.example.ui.components.PermissionType.CAMERA) {
+                                viewModel.setFacecamEnabled(!uiState.isFacecamEnabled)
+                            }
+                        }
                     )
 
                     // Reset Preview Transform
                     QuickGlassAction(
                         icon = Icons.Default.Refresh,
-                        label = "RESET",
+                        label = localizedString("RESET", viewModel),
+                        viewModel = viewModel,
                         onClick = { viewModel.updateCanvasTransform(1f, 0f, 0f) }
                     )
                 }
@@ -540,6 +666,7 @@ fun StudioPreviewScreen(
                         messages = uiState.chatMessages,
                         onPinComment = { viewModel.pinComment(it) },
                         onOpenChatHub = { showChatHubSheet = true },
+                        viewModel = viewModel,
                         modifier = Modifier.padding(bottom = 2.dp)
                     )
                 }
@@ -550,6 +677,7 @@ fun StudioPreviewScreen(
                     activeSceneId = uiState.activeSceneId,
                     onSelectScene = { sceneId -> viewModel.selectScene(sceneId) },
                     onAddScene = { showAddSceneDialog = true },
+                    viewModel = viewModel,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -557,12 +685,27 @@ fun StudioPreviewScreen(
                 Tier1SourceAndCanvasBar(
                     currentSource = uiState.currentSource,
                     onSelectSource = { source ->
-                        viewModel.toggleSource(source)
-                        if (source == StreamSource.M3U8) {
-                            showM3u8Dialog = true
-                        }
-                        if (source == StreamSource.SCREEN && viewModel.cachedMediaProjectionResult == null) {
-                            launchScreenCapture()
+                        when (source) {
+                            StreamSource.CAMERA -> {
+                                requestPermissionSafely(com.example.ui.components.PermissionType.CAMERA) {
+                                    viewModel.toggleSource(StreamSource.CAMERA)
+                                }
+                            }
+                            StreamSource.M3U8 -> {
+                                viewModel.toggleSource(StreamSource.M3U8)
+                                showM3u8Dialog = true
+                            }
+                            StreamSource.SCREEN -> {
+                                viewModel.toggleSource(StreamSource.SCREEN)
+                                if (viewModel.cachedMediaProjectionResult == null) {
+                                    launchScreenCapture()
+                                }
+                            }
+                            StreamSource.AUDIO -> {
+                                requestPermissionSafely(com.example.ui.components.PermissionType.MICROPHONE) {
+                                    viewModel.toggleSource(StreamSource.AUDIO)
+                                }
+                            }
                         }
                     },
                     currentAspect = uiState.streamConfig.aspectRatio,
@@ -574,7 +717,8 @@ fun StudioPreviewScreen(
                         val modes = MainViewModel.CanvasScaleMode.entries
                         val nextIndex = (modes.indexOf(uiState.canvasScaleMode) + 1) % modes.size
                         viewModel.setCanvasScaleMode(modes[nextIndex])
-                    }
+                    },
+                    viewModel = viewModel
                 )
 
                 // Tier 2 (Main Broadcast Dock): Mic Level, Mixer, Go Live/Stop (+Pause), Layers, Destinations
@@ -583,20 +727,31 @@ fun StudioPreviewScreen(
                     isPaused = uiState.isPaused,
                     isMicOn = uiState.isMicEnabled,
                     audioLevel = (uiState.audioLevelL + uiState.audioLevelR) / 2f,
-                    onToggleMic = { viewModel.toggleMic(!uiState.isMicEnabled) },
+                    onToggleMic = {
+                        if (!uiState.isMicEnabled) {
+                            requestPermissionSafely(com.example.ui.components.PermissionType.MICROPHONE) {
+                                viewModel.toggleMic(true)
+                            }
+                        } else {
+                            viewModel.toggleMic(false)
+                        }
+                    },
                     onOpenMixer = { showAudioMixer = true },
                     onGoLive = {
                         if (uiState.isStreaming) {
                             viewModel.stopStream()
                         } else {
                             if (!viewModel.hasValidDestination()) {
-                                Toast.makeText(context, "Configure destinations first!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, if (uiState.appLang == "ar") "يرجى إعداد المنصات أولاً!" else "Configure destinations first!", Toast.LENGTH_SHORT).show()
                                 showDestinationsSheet = true
                             } else {
-                                if (uiState.currentSource == StreamSource.SCREEN && viewModel.cachedMediaProjectionResult == null) {
-                                    launchScreenCapture()
-                                } else {
-                                    viewModel.startStream(context, viewModel.cachedMediaProjectionResult)
+                                val requiredPerm = if (uiState.currentSource == StreamSource.CAMERA) com.example.ui.components.PermissionType.CAMERA else com.example.ui.components.PermissionType.MICROPHONE
+                                requestPermissionSafely(requiredPerm) {
+                                    if (uiState.currentSource == StreamSource.SCREEN && viewModel.cachedMediaProjectionResult == null) {
+                                        launchScreenCapture()
+                                    } else {
+                                        viewModel.startStream(context, viewModel.cachedMediaProjectionResult)
+                                    }
                                 }
                             }
                         }
@@ -604,7 +759,8 @@ fun StudioPreviewScreen(
                     onTogglePause = { viewModel.togglePauseStream() },
                     onOpenLayers = { showBackgroundSheet = true },
                     onOpenDestinations = { showDestinationsSheet = true },
-                    activeDestinationsCount = uiState.endpoints.count { it.isEnabled }
+                    activeDestinationsCount = uiState.endpoints.count { it.isEnabled },
+                    viewModel = viewModel
                 )
             }
         }
@@ -990,6 +1146,7 @@ fun StudioPreviewScreen(
                     viewModel.addCustomDestination(context, "Custom RTMP", "rtmp://", "")
                 },
                 onDeleteCustom = { id -> viewModel.deleteCustomDestination(context, id) },
+                viewModel = viewModel,
                 onDismiss = { showDestinationsSheet = false }
             )
         }
@@ -1037,6 +1194,7 @@ fun StudioPreviewScreen(
                 onTickerToggle = { viewModel.setTickerEnabled(it) },
                 isScoreboardEnabled = uiState.bgConfig.scoreboard.isEnabled,
                 onScoreboardToggle = { viewModel.setScoreboardEnabled(it) },
+                viewModel = viewModel,
                 onDismiss = { showSettingsSheet = false }
             )
         }
@@ -1044,6 +1202,7 @@ fun StudioPreviewScreen(
 
     if (showAddSceneDialog) {
         AddSceneDialog(
+            viewModel = viewModel,
             onAddScene = { title, icon ->
                 viewModel.addCustomScene(title, icon)
                 showAddSceneDialog = false
@@ -1052,11 +1211,53 @@ fun StudioPreviewScreen(
         )
     }
 
-    if (uiState.showScreenCapturePrompt) {
-        ScreenCapturePromptDialog(
+    if (amberBannerMessage != null) {
+        com.example.ui.components.AmberPermissionBanner(
+            message = amberBannerMessage!!,
+            onRetry = {
+                pendingPermissionType?.let { type ->
+                    val permString = when (type) {
+                        com.example.ui.components.PermissionType.CAMERA -> android.Manifest.permission.CAMERA
+                        com.example.ui.components.PermissionType.MICROPHONE -> android.Manifest.permission.RECORD_AUDIO
+                        com.example.ui.components.PermissionType.NOTIFICATIONS -> if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) android.Manifest.permission.POST_NOTIFICATIONS else null
+                        else -> null
+                    }
+                    if (permString != null) {
+                        singlePermissionLauncher.launch(permString)
+                    }
+                }
+            },
+            onDismiss = { amberBannerMessage = null },
+            modifier = Modifier.zIndex(99f)
+        )
+    }
+
+    if (pendingPermissionType != null) {
+        com.example.ui.components.CyberGlassPermissionSheet(
+            permissionType = pendingPermissionType!!,
             viewModel = viewModel,
-            onStartScreenCapture = { launchScreenCapture() },
-            onDismiss = { viewModel.dismissScreenCapturePrompt() }
+            onGrantRequested = {
+                val type = pendingPermissionType
+                if (type == com.example.ui.components.PermissionType.OVERLAY) {
+                    try {
+                        val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                        context.startActivity(intent)
+                    } catch (e: Exception) {}
+                } else if (type != null) {
+                    val permString = when (type) {
+                        com.example.ui.components.PermissionType.CAMERA -> android.Manifest.permission.CAMERA
+                        com.example.ui.components.PermissionType.MICROPHONE -> android.Manifest.permission.RECORD_AUDIO
+                        com.example.ui.components.PermissionType.NOTIFICATIONS -> if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) android.Manifest.permission.POST_NOTIFICATIONS else null
+                        else -> null
+                    }
+                    if (permString != null) {
+                        singlePermissionLauncher.launch(permString)
+                    }
+                }
+            },
+            onDismiss = {
+                pendingPermissionType = null
+            }
         )
     }
 }
@@ -1454,16 +1655,18 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
         ) {
             Column {
                 Text(
-                    "STUDIO COMPOSITOR",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Black,
+                    localizedString("STUDIO_LAYERS", viewModel),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
                     color = Color.White
                 )
                 Text(
-                    "LAYERED BROADCAST PIPELINES",
-                    fontSize = 10.sp,
-                    color = CyberCyan,
-                    fontWeight = FontWeight.Bold
+                    localizedString("STUDIO_LAYERS_SUB", viewModel),
+                    fontSize = 12.sp,
+                    color = Color(0xFF94A3B8),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             IconButton(onClick = onDismiss) {
@@ -1473,7 +1676,12 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
 
         // 4-Tab Navigation Selector
         PillSelector(
-            options = listOf("FRAME & BG", "TEXT & TICKER", "SCOREBOARD", "LOGO & EMOJI"),
+            options = listOf(
+                localizedString("TAB_BG", viewModel),
+                localizedString("TAB_OVERLAYS", viewModel),
+                localizedString("TAB_TEXT", viewModel),
+                localizedString("TAB_EMOJI", viewModel)
+            ),
             selectedIndex = selectedTab,
             onSelect = { selectedTab = it }
         )
@@ -1490,7 +1698,7 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 // TAB 0: FRAME & BACKGROUND
                 0 -> {
                     // Image Source Card
-                    GlassSectionCard(title = "BACKGROUND IMAGE & URL") {
+                    GlassSectionCard(title = localizedString("IMAGE_SOURCE", viewModel)) {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Surface(
                                 onClick = {
@@ -1510,10 +1718,11 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                     Icon(Icons.Default.AddPhotoAlternate, null, tint = CyberCyan, modifier = Modifier.size(28.dp))
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        if (config.imageUri != null) "REPLACE GALLERY IMAGE" else "UPLOAD GALLERY IMAGE (PNG/JPG)",
+                                        localizedString("CHOOSE_GALLERY", viewModel),
                                         color = Color.White,
                                         fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        lineHeight = getLineHeight(viewModel)
                                     )
                                 }
                             }
@@ -1547,7 +1756,7 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                     colors = ButtonDefaults.buttonColors(containerColor = CyberCyan),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    Text("LOAD", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                                    Text(localizedString("LOAD_PLAY_STUDIO", viewModel).take(4), color = Color.Black, fontWeight = FontWeight.Black, fontSize = 11.sp, lineHeight = getLineHeight(viewModel))
                                 }
                             }
 
@@ -1557,13 +1766,19 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("DISPLAY MODE", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(localizedString("PRESET_LAYOUT_MODE", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                     TextButton(onClick = { viewModel.removeBackground(context) }) {
-                                        Text("CLEAR IMAGE", color = CrimsonRed, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                        Text(localizedString("DELETE", viewModel), color = CrimsonRed, fontSize = 11.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                                     }
                                 }
                                 PillSelector(
-                                    options = listOf("Full", "PiP", "Off"),
+                                    options = listOf(
+                                        localizedString("MODE_COVER", viewModel),
+                                        localizedString("MODE_CONTAIN", viewModel),
+                                        localizedString("MODE_TOP", viewModel),
+                                        localizedString("MODE_BOTTOM", viewModel),
+                                        localizedString("MODE_STRETCH", viewModel)
+                                    ),
                                     selectedIndex = when (config.displayMode) {
                                         MainViewModel.ImageDisplayMode.FULL_IMAGE -> 0
                                         MainViewModel.ImageDisplayMode.PIP_OVERLAY -> 1
@@ -1583,10 +1798,9 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                     }
 
                     // Preset Dark Gradients
-                    GlassSectionCard(title = "PRESET DARK THEMES & GRADIENTS") {
+                    GlassSectionCard(title = localizedString("PRESET_LAYOUT_MODE", viewModel)) {
                         val gradientPresets = listOf("Cyber Neon", "Midnight", "Sunset Violet", "Emerald Matrix", "Crimson Blood", "None")
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Pick an ambient backdrop for widescreen and 16:9 broadcasts:", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1608,7 +1822,8 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                             color = if (isSelected) CyberCyan else Color.White.copy(alpha = 0.8f),
                                             fontSize = 11.sp,
                                             fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            lineHeight = getLineHeight(viewModel)
                                         )
                                     }
                                 }
@@ -1617,32 +1832,13 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                     }
 
                     // Interactive Dimension & Transform Controls
-                    GlassSectionCard(title = "DIMENSION & TRANSFORM CONTROLS") {
+                    GlassSectionCard(title = localizedString("CANVAS_CONTROLS", viewModel)) {
                         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Text("CANVAS ASPECT RATIO", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            PillSelector(
-                                options = listOf("9:16", "16:9", "1:1", "Free"),
-                                selectedIndex = when (config.aspectRatio) {
-                                    "9:16" -> 0
-                                    "16:9" -> 1
-                                    "1:1" -> 2
-                                    else -> 3
-                                },
-                                onSelect = { idx ->
-                                    val ratio = when (idx) {
-                                        0 -> "9:16"
-                                        1 -> "16:9"
-                                        2 -> "1:1"
-                                        else -> "Free"
-                                    }
-                                    viewModel.updateBackgroundConfig(config.copy(aspectRatio = ratio))
-                                }
-                            )
-
-                            CompositorSlider("SCALE / ZOOM", config.zoom, 0.1f..3f) { viewModel.updateBackgroundConfig(config.copy(zoom = it)) }
-                            CompositorSlider("ROTATION", config.rotation, 0f..360f, suffix = "°") { viewModel.updateBackgroundConfig(config.copy(rotation = it)) }
-                            CompositorSlider("GAUSSIAN BLUR", config.blurRadius, 0f..30f, suffix = "px") { viewModel.updateBackgroundConfig(config.copy(blurRadius = it)) }
-                            CompositorSlider("OPACITY", config.opacity, 0f..1f) { viewModel.updateBackgroundConfig(config.copy(opacity = it)) }
+                            CompositorSlider(localizedString("ZOOM_SCALE", viewModel), config.zoom, 0.1f..3f) { viewModel.updateBackgroundConfig(config.copy(zoom = it)) }
+                            CompositorSlider(localizedString("X_OFFSET", viewModel), config.offsetX, -500f..500f, suffix = "px") { viewModel.updateBackgroundConfig(config.copy(offsetX = it)) }
+                            CompositorSlider(localizedString("Y_OFFSET", viewModel), config.offsetY, -500f..500f, suffix = "px") { viewModel.updateBackgroundConfig(config.copy(offsetY = it)) }
+                            CompositorSlider(localizedString("GAUSSIAN_BLUR", viewModel), config.blurRadius, 0f..30f, suffix = "px") { viewModel.updateBackgroundConfig(config.copy(blurRadius = it)) }
+                            CompositorSlider(localizedString("OPACITY", viewModel), config.opacity, 0f..1f) { viewModel.updateBackgroundConfig(config.copy(opacity = it)) }
                         }
                     }
                 }
@@ -1650,7 +1846,7 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 // TAB 1: TEXT, TICKER & ALERTS
                 1 -> {
                     // Section A: Multiple Custom Text Overlays
-                    GlassSectionCard(title = "CUSTOM TEXT OVERLAYS") {
+                    GlassSectionCard(title = localizedString("CUSTOM_TEXT_OVERLAYS", viewModel)) {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Button(
                                 onClick = { viewModel.addTextOverlay() },
@@ -1663,11 +1859,11 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                             ) {
                                 Icon(Icons.Default.TextFields, null, tint = CyberCyan, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("ADD TEXT LAYER (ARABIC / ENGLISH)", color = CyberCyan, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                                Text(localizedString("ADD_TEXT_LAYER", viewModel), color = CyberCyan, fontWeight = FontWeight.Black, fontSize = 11.sp, lineHeight = getLineHeight(viewModel))
                             }
 
                             if (config.textOverlays.isEmpty()) {
-                                Text("No active text layers. Tap above to add one.", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
+                                Text(localizedString("NO_ACTIVE_TEXT", viewModel), color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, lineHeight = getLineHeight(viewModel))
                             }
 
                             config.textOverlays.forEach { overlay ->
@@ -1681,20 +1877,20 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                         GlassTextField(
                                             value = overlay.text,
                                             onValueChange = { viewModel.updateTextOverlay(overlay.copy(text = it)) },
-                                            label = "CONTENT (ARABIC / ENGLISH)"
+                                            label = localizedString("CONTENT_LABEL", viewModel)
                                         )
 
-                                        Text("TEXT COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Text(localizedString("TEXT_COLOR", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                         ColorRow(selectedColor = overlay.textColor, onSelect = { viewModel.updateTextOverlay(overlay.copy(textColor = it)) })
 
-                                        Text("NEON GLOW COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Text(localizedString("NEON_GLOW_COLOR", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                         ColorRow(selectedColor = overlay.glowColor, onSelect = { viewModel.updateTextOverlay(overlay.copy(glowColor = it)) })
 
-                                        Text("PILL BACKGROUND COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Text(localizedString("PILL_BG_COLOR", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                         ColorRow(selectedColor = overlay.backgroundColor, onSelect = { viewModel.updateTextOverlay(overlay.copy(backgroundColor = it)) })
 
-                                        CompositorSlider("FONT SIZE", overlay.fontSize.toFloat(), 12f..80f) { viewModel.updateTextOverlay(overlay.copy(fontSize = it.toInt())) }
-                                        CompositorSlider("OPACITY", overlay.opacity, 0f..1f) { viewModel.updateTextOverlay(overlay.copy(opacity = it)) }
+                                        CompositorSlider(localizedString("FONT_SIZE", viewModel), overlay.fontSize.toFloat(), 12f..80f) { viewModel.updateTextOverlay(overlay.copy(fontSize = it.toInt())) }
+                                        CompositorSlider(localizedString("OPACITY", viewModel), overlay.opacity, 0f..1f) { viewModel.updateTextOverlay(overlay.copy(opacity = it)) }
                                     }
                                 }
                             }
@@ -1702,10 +1898,10 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                     }
 
                     // Section B: Bottom Breaking News Scrolling Ticker
-                    GlassSectionCard(title = "BOTTOM BREAKING NEWS TICKER") {
+                    GlassSectionCard(title = localizedString("BOTTOM_NEWS_TICKER", viewModel)) {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             FeatureToggleRow(
-                                title = "ENABLE BOTTOM NEWS TICKER",
+                                title = localizedString("ENABLE_NEWS_TICKER", viewModel),
                                 checked = config.ticker.isEnabled,
                                 onCheckedChange = { viewModel.setTickerEnabled(it) }
                             )
@@ -1714,10 +1910,10 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                 GlassTextField(
                                     value = config.ticker.text,
                                     onValueChange = { viewModel.updateTicker(config.ticker.copy(text = it)) },
-                                    label = "TICKER HEADLINE BANNER"
+                                    label = localizedString("TICKER_HEADLINE", viewModel)
                                 )
 
-                                Text("SCROLL SPEED", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("SCROLL_SPEED", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                 PillSelector(
                                     options = listOf("Slow (0.5x)", "Normal (1.0x)", "Fast (2.0x)"),
                                     selectedIndex = when {
@@ -1735,13 +1931,13 @@ fun BackgroundStudioSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                     }
                                 )
 
-                                Text("ACCENT GLOW COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("ACCENT_GLOW_COLOR", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                 ColorRow(
                                     selectedColor = config.ticker.accentColor,
                                     onSelect = { viewModel.updateTicker(config.ticker.copy(accentColor = it)) }
                                 )
 
-                                Text("BACKGROUND COLOR", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(localizedString("BACKGROUND_COLOR", viewModel), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = getLineHeight(viewModel))
                                 ColorRow(
                                     selectedColor = config.ticker.backgroundColor,
                                     onSelect = { viewModel.updateTicker(config.ticker.copy(backgroundColor = it)) }
@@ -2805,6 +3001,7 @@ fun ScreenCapturePreviewCard(
     isStreaming: Boolean,
     isReady: Boolean,
     onRequestCapture: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -2850,32 +3047,41 @@ fun ScreenCapturePreviewCard(
                 }
             }
 
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally, 
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(end = 76.dp) // Avoid colliding with right-side FABs
+            ) {
                 Surface(
                     color = if (isStreaming) Color(0xFFEF4444).copy(alpha = 0.2f) else Color(0xFF818CF8).copy(alpha = 0.2f),
                     shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, if (isStreaming) Color(0xFFEF4444) else Color(0xFF818CF8))
                 ) {
                     Text(
-                        text = if (isStreaming) "LIVE SCREEN BROADCASTING" else if (isReady) "SCREEN READY TO BROADCAST" else "SCREEN CAPTURE PENDING",
+                        text = if (isStreaming) localizedString("LIVE", viewModel) else if (isReady) localizedString("READY", viewModel) else localizedString("CONNECTING", viewModel),
                         color = if (isStreaming) Color(0xFFEF4444) else Color(0xFF818CF8),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
 
                 Text(
-                    text = "Entire Android Display Feed",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
+                    text = if (isStreaming) localizedString("LIVE", viewModel) else localizedString("SCREEN_BROADCAST_SUB", viewModel),
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = getLineHeight(viewModel)
                 )
                 Text(
-                    text = "Games, tutorials, and applications will broadcast directly to active destinations.",
+                    text = localizedString("SCREEN_SHARE_DESC", viewModel),
                     color = Color.White.copy(alpha = 0.65f),
                     fontSize = 11.sp,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = getLineHeight(viewModel)
                 )
             }
 
@@ -2888,7 +3094,7 @@ fun ScreenCapturePreviewCard(
                 ) {
                     Icon(Icons.Default.Security, null, tint = Color.Black, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("GRANT SCREEN PERMISSION", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text(localizedString("START_SCREEN_SHARE", viewModel), color = Color.Black, fontWeight = FontWeight.Black, fontSize = 11.sp, lineHeight = getLineHeight(viewModel))
                 }
             }
         }
@@ -2900,6 +3106,7 @@ fun QuickGlassAction(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -2924,7 +3131,8 @@ fun QuickGlassAction(
                 fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = getLineHeight(viewModel)
             )
         }
     }

@@ -62,18 +62,52 @@ class LiveStreamService : Service(), ConnectChecker {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = createNotification("Ready to stream")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                notificationId, 
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or 
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(notificationId, notification)
+    private fun getDynamicForegroundServiceType(includeMediaProjection: Boolean = false): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0
+        var types = 0
+        val hasCamera = ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasMic = ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (hasCamera) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
         }
+        if (hasMic) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        if (includeMediaProjection) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        }
+        if (types == 0) {
+            types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        }
+        return types
+    }
+
+    private fun startOrUpdateForeground(content: String = "Ready to stream", includeMediaProjection: Boolean = false) {
+        val notification = createNotification(content)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val serviceType = getDynamicForegroundServiceType(includeMediaProjection)
+                startForeground(notificationId, notification, serviceType)
+            } else {
+                startForeground(notificationId, notification)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("LiveStreamService", "Failed to startForeground: ${t.message}", t)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                } else {
+                    startForeground(notificationId, notification)
+                }
+            } catch (t2: Throwable) {
+                android.util.Log.e("LiveStreamService", "Fallback startForeground failed: ${t2.message}", t2)
+            }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startOrUpdateForeground("Ready to stream")
         return START_STICKY
     }
 
@@ -82,16 +116,7 @@ class LiveStreamService : Service(), ConnectChecker {
      * This must be called AFTER the user has granted projection permission.
      */
     fun upgradeToMediaProjection() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val notification = createNotification("Screen Capture Active")
-            startForeground(
-                notificationId,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        }
+        startOrUpdateForeground("Screen Capture Active", includeMediaProjection = true)
     }
 
     override fun onBind(intent: Intent?): IBinder {

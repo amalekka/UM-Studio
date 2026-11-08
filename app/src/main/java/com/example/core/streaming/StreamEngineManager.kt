@@ -182,6 +182,10 @@ class StreamEngineManager(
         if (isReleased) return
         if (currentSource != StreamSource.CAMERA) return
         try {
+            if (openGlView.holder.surface?.isValid != true) {
+                Log.w("StreamEngine", "Surface is not valid, skipping camera init")
+                return
+            }
             if (rtmpCamera2 == null) {
                 rtmpCamera2 = RtmpCamera2(openGlView, connectChecker).apply {
                     setFpsListener { measuredFps ->
@@ -190,15 +194,19 @@ class StreamEngineManager(
                     setCustomAudioEffect(audioEffect)
                 }
             } else {
-                rtmpCamera2?.replaceView(openGlView)
+                try {
+                    rtmpCamera2?.replaceView(openGlView)
+                } catch (t: Throwable) {
+                    Log.e("StreamEngine", "Error replacing view in initCamera: ${t.message}")
+                }
             }
             _isFrontCamera.value = rtmpCamera2?.isFrontCamera == true
             _isFlashOn.value = rtmpCamera2?.isLanternEnabled == true
             if (currentSource == StreamSource.CAMERA) {
                 startPreview()
             }
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Error initializing camera: ${e.message}")
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Error initializing camera: ${t.message}")
         }
     }
 
@@ -245,10 +253,17 @@ class StreamEngineManager(
     fun setPreviewView(openGlView: OpenGlView?) {
         if (isReleased || openGlView == null) return
         try {
-            rtmpCamera2?.replaceView(openGlView)
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Failed to set preview view: ${e.message}")
+            if (openGlView.holder.surface?.isValid == true && currentSource == StreamSource.CAMERA) {
+                rtmpCamera2?.replaceView(openGlView)
+            }
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Failed to set preview view: ${t.message}")
         }
+    }
+
+    fun initDisplay(openGlView: OpenGlView) {
+        if (isReleased) return
+        // Note: RtmpDisplay doesn't support direct preview view in this version
     }
 
     fun setSource(source: StreamSource) {
@@ -266,8 +281,9 @@ class StreamEngineManager(
                 startPreview()
             }
             StreamSource.AUDIO -> {
-                stopCameraHardware()
+                // Keep GL pipeline active for background image broadcast
                 stopDisplayStream()
+                startPreview()
             }
         }
     }
@@ -275,14 +291,17 @@ class StreamEngineManager(
     fun stopCameraHardware() {
         if (isReleased) return
         try {
-            if (rtmpCamera2?.isStreaming == true) {
-                rtmpCamera2?.stopStream()
+            val camera = rtmpCamera2
+            if (camera != null) {
+                if (camera.isStreaming) {
+                    try { camera.stopStream() } catch (t: Throwable) { Log.e("StreamEngine", "stopStream error: ${t.message}") }
+                }
+                if (camera.isOnPreview) {
+                    try { camera.stopPreview() } catch (t: Throwable) { Log.e("StreamEngine", "stopPreview error: ${t.message}") }
+                }
             }
-            if (rtmpCamera2?.isOnPreview == true) {
-                rtmpCamera2?.stopPreview()
-            }
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Error stopping camera hardware: ${e.message}")
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Error stopping camera hardware: ${t.message}")
         }
     }
 
@@ -292,8 +311,8 @@ class StreamEngineManager(
             if (rtmpDisplay?.isStreaming == true) {
                 rtmpDisplay?.stopStream()
             }
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Error stopping display stream: ${e.message}")
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Error stopping display stream: ${t.message}")
         }
     }
 
@@ -301,25 +320,27 @@ class StreamEngineManager(
         if (isReleased) return
         if (currentSource != StreamSource.CAMERA) return
         try {
-            if (rtmpCamera2?.isOnPreview == false) {
+            val camera = rtmpCamera2 ?: return
+            if (!camera.isOnPreview) {
                 val (defaultW, defaultH) = calculateResolution(currentConfig.videoQuality, currentConfig.aspectRatio)
                 val targetW = if (w > 0) w else defaultW
                 val targetH = if (h > 0) h else defaultH
-                rtmpCamera2?.startPreview(targetW, targetH)
+                camera.startPreview(targetW, targetH)
             }
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Failed to start preview (surface may be abandoned)", e)
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Failed to start preview (surface may be abandoned): ${t.message}")
         }
     }
 
     fun stopPreview() {
         if (isReleased) return
         try {
-            if (rtmpCamera2?.isStreaming == false && rtmpCamera2?.isOnPreview == true) {
-                rtmpCamera2?.stopPreview()
+            val camera = rtmpCamera2
+            if (camera != null && camera.isOnPreview && !camera.isStreaming) {
+                camera.stopPreview()
             }
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Error stopping preview", e)
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Error stopping preview: ${t.message}")
         }
     }
 
@@ -416,11 +437,16 @@ class StreamEngineManager(
     fun startRecord(filePath: String): Boolean {
         if (isReleased) return false
         try {
-            if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
-                rtmpCamera2?.startRecord(filePath)
-            } else {
-                rtmpDisplay?.startRecord(filePath)
+            when (currentSource) {
+                StreamSource.CAMERA, StreamSource.AUDIO -> {
+                    rtmpCamera2?.startRecord(filePath) ?: return false
+                }
+                StreamSource.SCREEN -> {
+                    rtmpDisplay?.startRecord(filePath) ?: return false
+                }
+                else -> return false
             }
+            
             _isRecording.value = true
             return true
         } catch (e: Exception) {

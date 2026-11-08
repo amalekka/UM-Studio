@@ -69,9 +69,8 @@ fun GlassSectionCard(
                 Text(
                     title, 
                     color = Color.White, 
-                    fontSize = 12.sp, 
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp
+                    fontSize = 11.sp, 
+                    fontWeight = FontWeight.Medium
                 )
                 trailing?.invoke()
             }
@@ -87,6 +86,7 @@ fun GlassTextField(
     onValueChange: (String) -> Unit,
     label: String,
     modifier: Modifier = Modifier,
+    placeholder: String? = null,
     isPassword: Boolean = false,
     trailingIcon: @Composable (() -> Unit)? = null
 ) {
@@ -105,14 +105,24 @@ fun GlassTextField(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
             ) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f).padding(vertical = 12.dp),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
-                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                    cursorBrush = Brush.verticalGradient(listOf(Color.Cyan, Color.Cyan))
-                )
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty() && !placeholder.isNullOrEmpty()) {
+                        Text(
+                            text = placeholder,
+                            color = Color.White.copy(alpha = 0.35f),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    }
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        cursorBrush = Brush.verticalGradient(listOf(Color.Cyan, Color.Cyan))
+                    )
+                }
                 if (isPassword) {
                     IconButton(onClick = { showPassword = !showPassword }) {
                         Icon(

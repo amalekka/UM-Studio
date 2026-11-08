@@ -36,6 +36,8 @@ import com.example.core.streaming.StreamSource
 import com.example.ui.MainViewModel
 import com.example.ui.components.GlassTextField
 import com.example.ui.components.SettingsBackground
+import com.example.ui.localizedString
+import com.example.ui.getLineHeight
 
 @Composable
 fun M3u8StreamsScreen(
@@ -45,6 +47,11 @@ fun M3u8StreamsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    
+    // Localization
+    val title = localizedString("STREAM_LINKS", viewModel)
+    val subtitle = localizedString("STREAM_LINKS_SUB", viewModel)
+    val lineHeight = getLineHeight(viewModel)
 
     // Form states for new stream
     var newServerName by remember { mutableStateOf("") }
@@ -73,17 +80,20 @@ fun M3u8StreamsScreen(
                 ) {
                     Column {
                         Text(
-                            text = "STREAMING",
+                            text = title,
                             color = Color.White,
                             fontSize = 18.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 1.sp
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            lineHeight = lineHeight
                         )
                         Text(
-                            text = "HLS STREAMING & CONTROL",
-                            color = Color(0xFF10B981),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            text = subtitle,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            lineHeight = lineHeight
                         )
                     }
 
@@ -100,7 +110,7 @@ fun M3u8StreamsScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(Icons.Default.Dvr, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
-                            Text("STUDIO", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(localizedString("RESET", viewModel), color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = lineHeight)
                         }
                     }
                 }
@@ -133,13 +143,15 @@ fun M3u8StreamsScreen(
                         clipboardManager.setText(AnnotatedString(uiState.m3u8Url))
                         Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
                     },
-                    onToggleStreamCopy = { viewModel.setPreferM3u8StreamCopy(it) }
+                    onToggleStreamCopy = { viewModel.setPreferM3u8StreamCopy(it) },
+                    viewModel = viewModel
                 )
             }
 
             // 2. ADD NEW M3U8 SERVER FORM (MIDDLE)
             item {
                 AddM3u8ServerFormCard(
+                    viewModel = viewModel,
                     serverName = newServerName,
                     onServerNameChange = { newServerName = it },
                     serverUrl = newServerUrl,
@@ -190,17 +202,19 @@ fun M3u8StreamsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "SAVED M3U8 SERVERS (${uiState.savedStreams.size})",
+                        text = "${localizedString("STREAM_LINKS", viewModel)} (${uiState.savedStreams.size})",
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.sp,
+                        lineHeight = getLineHeight(viewModel)
                     )
                     Text(
-                        text = "ONE-TAP RELAY",
+                        text = localizedString("ONE_TAP_RELAY", viewModel),
                         color = Color.White.copy(alpha = 0.5f),
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = lineHeight
                     )
                 }
             }
@@ -230,6 +244,7 @@ fun M3u8StreamsScreen(
                     val isCurrentActive = stream.url == uiState.m3u8Url && uiState.m3u8State != MainViewModel.M3u8PlaybackState.STOPPED
                     SavedStreamCard(
                         stream = stream,
+                        viewModel = viewModel,
                         isActive = isCurrentActive,
                         isPlaying = isCurrentActive && uiState.m3u8State == MainViewModel.M3u8PlaybackState.PLAYING,
                         onLoadAndPlay = {
@@ -257,6 +272,7 @@ fun M3u8StreamsScreen(
     editingStream?.let { stream ->
         EditM3u8StreamDialog(
             stream = stream,
+            viewModel = viewModel,
             onDismiss = { editingStream = null },
             onSave = { name, url, userAgent, referer ->
                 viewModel.updateSavedStream(
@@ -282,7 +298,8 @@ fun ActiveStreamControllerCard(
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onCopyUrl: () -> Unit,
-    onToggleStreamCopy: (Boolean) -> Unit = {}
+    onToggleStreamCopy: (Boolean) -> Unit = {},
+    viewModel: MainViewModel
 ) {
     val statusColor = when (uiState.m3u8State) {
         MainViewModel.M3u8PlaybackState.PLAYING -> Color(0xFF10B981)
@@ -333,11 +350,12 @@ fun ActiveStreamControllerCard(
                     )
 
                     Text(
-                        text = "STATUS: ${uiState.m3u8State.name}",
+                        text = "${localizedString("PAUSE", viewModel).take(6)}: ${uiState.m3u8State.name}",
                         color = statusColor,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.sp,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
 
@@ -367,12 +385,13 @@ fun ActiveStreamControllerCard(
             // Active Stream Info
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = uiState.activeM3u8Name.ifBlank { "No Stream Loaded" },
+                    text = uiState.activeM3u8Name.ifBlank { localizedString("DISABLED", viewModel) },
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = getLineHeight(viewModel)
                 )
 
                 Row(
@@ -414,19 +433,21 @@ fun ActiveStreamControllerCard(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "AUDIO VOLUME",
+                            text = "VOLUME",
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = getLineHeight(viewModel)
                         )
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = if (uiState.isM3u8Muted) "MUTED" else "${(uiState.m3u8Volume * 100).toInt()}%",
+                            text = if (uiState.isM3u8Muted) localizedString("MIC_OFF", viewModel) else "${(uiState.m3u8Volume * 100).toInt()}%",
                             color = if (uiState.isM3u8Muted) Color(0xFFEF4444) else Color(0xFF38BDF8),
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Black
+                            fontWeight = FontWeight.Black,
+                            lineHeight = getLineHeight(viewModel)
                         )
                         Surface(
                             onClick = onToggleMute,
@@ -434,11 +455,12 @@ fun ActiveStreamControllerCard(
                             shape = RoundedCornerShape(6.dp)
                         ) {
                             Text(
-                                text = if (uiState.isM3u8Muted) "UNMUTE" else "MUTE",
+                                text = if (uiState.isM3u8Muted) localizedString("UNMUTE", viewModel) else localizedString("MUTE", viewModel),
                                 color = if (uiState.isM3u8Muted) Color(0xFFEF4444) else Color(0xFF38BDF8),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                lineHeight = getLineHeight(viewModel)
                             )
                         }
                     }
@@ -503,10 +525,11 @@ fun ActiveStreamControllerCard(
                     Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PAUSED) "RESUME" else "PLAY",
+                        text = if (uiState.m3u8State == MainViewModel.M3u8PlaybackState.PAUSED) localizedString("PAUSE", viewModel).take(6) else localizedString("LIVE", viewModel).take(4), 
                         color = Color.Black,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Black
+                        fontWeight = FontWeight.Black,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
 
@@ -525,10 +548,11 @@ fun ActiveStreamControllerCard(
                     Icon(Icons.Default.Pause, null, tint = Color.Black, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "PAUSE",
+                        text = localizedString("PAUSE", viewModel),
                         color = Color.Black,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Black
+                        fontWeight = FontWeight.Black,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
 
@@ -546,10 +570,11 @@ fun ActiveStreamControllerCard(
                     Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "FORCE STOP",
+                        text = localizedString("STOP", viewModel),
                         color = Color.White,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Black
+                        fontWeight = FontWeight.Black,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
             }
@@ -559,6 +584,7 @@ fun ActiveStreamControllerCard(
 
 @Composable
 fun AddM3u8ServerFormCard(
+    viewModel: MainViewModel,
     serverName: String,
     onServerNameChange: (String) -> Unit,
     serverUrl: String,
@@ -591,11 +617,12 @@ fun AddM3u8ServerFormCard(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Default.AddCircleOutline, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
                     Text(
-                        text = "ADD NEW M3U8 SERVER",
+                        text = localizedString("ADD_NEW_M3U8", viewModel),
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.sp,
+                        lineHeight = getLineHeight(viewModel)
                     )
                 }
             }
@@ -603,10 +630,11 @@ fun AddM3u8ServerFormCard(
             // Quick Preset Samples
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "QUICK TEST PRESETS (TAP TO LOAD)",
+                    text = localizedString("QUICK_TEST_PRESETS", viewModel),
                     color = Color.White.copy(alpha = 0.5f),
                     fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = getLineHeight(viewModel)
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -664,14 +692,14 @@ fun AddM3u8ServerFormCard(
             GlassTextField(
                 value = serverName,
                 onValueChange = onServerNameChange,
-                label = "SERVER / STREAM NAME (e.g., Live Sport Feed)"
+                label = localizedString("SERVER_STREAM_NAME", viewModel)
             )
 
             // Server URL Input with Paste & Clear Buttons
             GlassTextField(
                 value = serverUrl,
                 onValueChange = onServerUrlChange,
-                label = "M3U8 / HLS URL (.m3u8)",
+                label = localizedString("M3U8_URL_LABEL", viewModel),
                 trailingIcon = {
                     Row {
                         IconButton(onClick = onPasteUrl) {
@@ -696,10 +724,11 @@ fun AddM3u8ServerFormCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "OPTIONAL HTTP HEADERS (USER-AGENT / REFERER)",
+                    text = localizedString("HTTP_HEADERS_OPTIONAL", viewModel),
                     color = Color(0xFF818CF8),
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = getLineHeight(viewModel)
                 )
                 Icon(
                     if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -737,11 +766,12 @@ fun AddM3u8ServerFormCard(
                 Icon(Icons.Default.Add, null, tint = Color.White)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "+ SAVE SERVER TO PLAYLIST",
+                    text = localizedString("SAVE", viewModel),
                     color = Color.White,
                     fontWeight = FontWeight.Black,
                     fontSize = 12.sp,
-                    letterSpacing = 1.sp
+                    letterSpacing = 1.sp,
+                    lineHeight = getLineHeight(viewModel)
                 )
             }
         }
@@ -751,6 +781,7 @@ fun AddM3u8ServerFormCard(
 @Composable
 fun SavedStreamCard(
     stream: MainViewModel.SavedStreamItem,
+    viewModel: MainViewModel,
     isActive: Boolean,
     isPlaying: Boolean,
     onLoadAndPlay: () -> Unit,
@@ -799,10 +830,11 @@ fun SavedStreamCard(
                         )
                         if (isActive) {
                             Text(
-                                text = if (isPlaying) "CURRENTLY PLAYING" else "CURRENTLY LOADED",
+                                text = if (isPlaying) localizedString("CURRENTLY_PLAYING", viewModel) else localizedString("CURRENTLY_LOADED", viewModel),
                                 color = Color(0xFF10B981),
                                 fontSize = 9.sp,
-                                fontWeight = FontWeight.Black
+                                fontWeight = FontWeight.Black,
+                                lineHeight = getLineHeight(viewModel)
                             )
                         }
                     }
@@ -882,7 +914,7 @@ fun SavedStreamCard(
                 ) {
                     Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("LOAD & PLAY ON STUDIO", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    Text(localizedString("LOAD_PLAY_STUDIO", viewModel), color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                 }
 
                 if (isActive) {
@@ -905,6 +937,7 @@ fun SavedStreamCard(
 @Composable
 fun EditM3u8StreamDialog(
     stream: MainViewModel.SavedStreamItem,
+    viewModel: MainViewModel,
     onDismiss: () -> Unit,
     onSave: (name: String, url: String, userAgent: String, referer: String) -> Unit
 ) {
@@ -929,7 +962,7 @@ fun EditM3u8StreamDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("EDIT M3U8 SERVER", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                    Text(localizedString("EDIT_M3U8_SERVER", viewModel), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black, lineHeight = getLineHeight(viewModel))
                     IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.Close, null, tint = Color.Gray)
                     }

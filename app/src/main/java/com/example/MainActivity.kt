@@ -87,19 +87,29 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         
-        checkPermissions()
+        // Launch instantly and bind streaming service without blocking startup permission popups
+        startStreamService()
 
         setContent {
+            val mainViewModel: MainViewModel = viewModel()
+            val uiState by mainViewModel.uiState.collectAsState()
+            
+            LaunchedEffect(Unit) {
+                mainViewModel.initLang(this@MainActivity)
+                mainViewModel.initDestinations(this@MainActivity)
+            }
+
+            val layoutDirection = if (uiState.appLang == "ar") androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr
+
             MyApplicationTheme(darkTheme = true) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val mainViewModel: MainViewModel = viewModel()
-                    viewModel = mainViewModel
-                    mainViewModel.initDestinations(this@MainActivity)
-                    
-                    MainScreen(mainViewModel)
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides layoutDirection) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        viewModel = mainViewModel
+                        MainScreen(mainViewModel)
+                    }
                 }
             }
         }

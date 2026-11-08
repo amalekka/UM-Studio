@@ -110,7 +110,7 @@ class M3u8RestreamEngine(
 
         try {
             val dataSourceFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent("LiveStreamPro/1.0")
+                .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
                 .setDefaultRequestProperties(customHeaders)
                 .setAllowCrossProtocolRedirects(true)
 
@@ -260,20 +260,35 @@ class M3u8RestreamEngine(
 
             try { play() } catch (e: Throwable) {}
             try { startStatsMonitor(config) } catch (e: Throwable) {}
+            
+            this.lastConfig = config
+            this.lastPrimaryUrl = primaryUrl
+            this.lastAllUrls = allUrls
 
-            val targets = if (allUrls.isNotEmpty()) allUrls else listOf(primaryUrl)
+            val rtmpTargets = if (allUrls.isNotEmpty()) allUrls else listOf(primaryUrl)
             val flvFlags = "no_duration_filesize"
             val rtmpFlags = "-rtmp_buffer 1000 -rtmp_live live"
             
-            val outArgs = if (targets.size == 1) {
-                val url = targets[0].trim().removeSurrounding("\"").removeSurrounding("'")
-                "$rtmpFlags -flvflags $flvFlags -f flv \"$url\""
-            } else {
-                val teeList = targets.joinToString("|") { 
-                    val url = it.trim().removeSurrounding("\"").removeSurrounding("'")
-                    "[f=flv:flvflags=$flvFlags:onfail=ignore]$url"
+            val outArgs = if (!isRecording || recordPath == null) {
+                if (rtmpTargets.size == 1) {
+                    val url = rtmpTargets[0].trim().removeSurrounding("\"").removeSurrounding("'")
+                    "$rtmpFlags -flvflags $flvFlags -f flv \"$url\""
+                } else {
+                    val teeList = rtmpTargets.joinToString("|") { 
+                        val url = it.trim().removeSurrounding("\"").removeSurrounding("'")
+                        "[f=flv:flvflags=$flvFlags:onfail=ignore]$url"
+                    }
+                    "-f tee -map 0:v -map 0:a? \"$teeList\""
                 }
-                "-f tee -map 0:v -map 0:a? \"$teeList\""
+            } else {
+                // Recording + RTMP(s)
+                val outputs = mutableListOf<String>()
+                rtmpTargets.forEach { 
+                    val url = it.trim().removeSurrounding("\"").removeSurrounding("'")
+                    outputs.add("[f=flv:flvflags=$flvFlags:onfail=ignore]$url")
+                }
+                outputs.add("[f=mp4]\"$recordPath\"")
+                "-f tee -map 0:v -map 0:a? \"${outputs.joinToString("|")}\""
             }
 
             val fps = if (config.targetFps > 0) config.targetFps else if (config.videoQuality.fps > 0) config.videoQuality.fps else 30
@@ -673,6 +688,45 @@ class M3u8RestreamEngine(
         stopPlayer()
         streamManager.clearFilters()
         surfaceFilter = null
+    }
+
+    private var isRecording = false
+    private var recordPath: String? = null
+    private var lastConfig: StreamConfig? = null
+    private var lastPrimaryUrl: String? = null
+    private var lastAllUrls: List<String> = emptyList()
+
+    fun startRecord(filePath: String): Boolean {
+        this.recordPath = filePath
+        this.isRecording = true
+        
+        if (_isRestreaming.value && lastConfig != null) {
+            // Restart with recording output
+            startRestreaming(
+                lastConfig!!,
+                lastPrimaryUrl ?: "",
+                lastAllUrls
+            )
+            return true
+        } else {
+            // Not restreaming, just mark it so next time it starts with recording
+            // Or start a dedicated recording session?
+            // For now, let's just mark it.
+            return true
+        }
+    }
+
+    fun stopRecord() {
+        this.isRecording = false
+        this.recordPath = null
+        if (_isRestreaming.value && lastConfig != null) {
+            // Restart without recording output
+            startRestreaming(
+                lastConfig!!,
+                lastPrimaryUrl ?: "",
+                lastAllUrls
+            )
+        }
     }
 
     private fun releasePlayer() {
