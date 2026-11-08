@@ -109,7 +109,7 @@ class StreamEngineManager(
     private var currentConfig: StreamConfig = StreamConfig()
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
-    private val maxReconnectAttempts = 5
+    private val maxReconnectAttempts = 3
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     private val audioEffect = object : com.pedro.encoder.input.audio.CustomAudioEffect() {
@@ -402,11 +402,11 @@ class StreamEngineManager(
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e("StreamEngine", "Error starting stream codec: ${e.message}", e)
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Fatal error starting stream codec: ${t.message}", t)
             _status.value = StreamingStatus.ERROR
             _diagnosticIsError.value = true
-            _diagnosticMessage.value = "Start Error: ${e.message}"
+            _diagnosticMessage.value = "Start Failed: ${t.javaClass.simpleName}"
         }
     }
 
@@ -451,22 +451,30 @@ class StreamEngineManager(
             if (_isRecording.value) {
                 stopRecord()
             }
-        } catch (_: Exception) {}
-        if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
-            rtmpCamera2?.stopStream()
-        } else {
-            rtmpDisplay?.stopStream()
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Error during stopRecord: ${t.message}")
         }
-        bitrateAdapter = null
-        reconnectJob?.cancel()
-        reconnectAttempts = 0
-        _status.value = StreamingStatus.IDLE
-        _bitrate.value = 0
-        _fps.value = 0
-        _audioLevelL.value = 0f
-        _audioLevelR.value = 0f
-        _diagnosticMessage.value = "Ready"
-        _diagnosticIsError.value = false
+        
+        try {
+            if (currentSource == StreamSource.CAMERA || currentSource == StreamSource.M3U8 || currentSource == StreamSource.AUDIO) {
+                rtmpCamera2?.stopStream()
+            } else {
+                rtmpDisplay?.stopStream()
+            }
+        } catch (t: Throwable) {
+            Log.e("StreamEngine", "Error stopping RTMP engine: ${t.message}")
+        } finally {
+            bitrateAdapter = null
+            reconnectJob?.cancel()
+            reconnectAttempts = 0
+            _status.value = StreamingStatus.IDLE
+            _bitrate.value = 0
+            _fps.value = 0
+            _audioLevelL.value = 0f
+            _audioLevelR.value = 0f
+            _diagnosticMessage.value = "Ready"
+            _diagnosticIsError.value = false
+        }
     }
 
     fun isStreaming(): Boolean {
@@ -613,6 +621,8 @@ class StreamEngineManager(
             attemptReconnect()
         } else {
             _status.value = StreamingStatus.ERROR
+            _diagnosticIsError.value = true
+            _diagnosticMessage.value = "Connection Lost: Maximum retries reached"
         }
     }
 
@@ -626,7 +636,9 @@ class StreamEngineManager(
 
     fun onDisconnect() {
         if (isReleased) return
-        if (_status.value != StreamingStatus.RECONNECTING) {
+        if (_status.value == StreamingStatus.STREAMING && currentConfig.isAutoReconnectEnabled && reconnectAttempts < maxReconnectAttempts) {
+            attemptReconnect()
+        } else if (_status.value != StreamingStatus.RECONNECTING) {
             _status.value = StreamingStatus.DISCONNECTED
             _diagnosticMessage.value = "Disconnected"
         }
@@ -637,7 +649,10 @@ class StreamEngineManager(
         reconnectJob = scope.launch {
             _status.value = StreamingStatus.RECONNECTING
             reconnectAttempts++
-            delay(3000)
+            _diagnosticMessage.value = "Reconnecting ($reconnectAttempts/$maxReconnectAttempts) in 2s..."
+            _diagnosticIsError.value = false
+            delay(2000)
+            if (isReleased) return@launch
             currentConfig.endpoints.firstOrNull { it.isEnabled }?.let { endpoint ->
                 val url = buildDestinationUrl(endpoint.url, endpoint.streamKey)
                 prepareStream(currentConfig)

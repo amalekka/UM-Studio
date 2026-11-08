@@ -5,6 +5,11 @@ enum class VideoCodec {
     HEVC // H.265
 }
 
+enum class EncoderEngine {
+    HARDWARE_MEDIACODEC,
+    SOFTWARE_X264
+}
+
 data class StreamConfig(
     val title: String = "",
     val description: String = "",
@@ -13,7 +18,14 @@ data class StreamConfig(
     val aspectRatio: AspectRatioMode = AspectRatioMode.LANDSCAPE_16_9,
     val endpoints: List<PlatformEndpoint> = emptyList(),
     val isRecordingEnabled: Boolean = false,
-    val isAutoReconnectEnabled: Boolean = true
+    val isAutoReconnectEnabled: Boolean = true,
+    val targetFps: Int = 30,
+    val keyframeIntervalSec: Int = 2,
+    val videoBitrateKbps: Int = 4500,
+    val isAdaptiveBitrateEnabled: Boolean = true,
+    val encoderEngine: EncoderEngine = EncoderEngine.HARDWARE_MEDIACODEC,
+    val keepScreenAwake: Boolean = true,
+    val backgroundStreamingEnabled: Boolean = true
 )
 
 sealed class AspectRatioMode {
@@ -136,6 +148,17 @@ sealed class PlatformEndpoint {
         override val defaultUrl = "rtmps://fa723fc1b171.global-contribute.live-video.net/app/"
     }
 
+    data class Telegram(
+        override val name: String = "Telegram Live",
+        override val url: String = "rtmps://dc4-1.rtmp.t.me/s/",
+        override val streamKey: String = "",
+        override val isEnabled: Boolean = false,
+        override val viewerCount: Int = 0
+    ) : PlatformEndpoint() {
+        override val id = "telegram"
+        override val defaultUrl = "rtmps://dc4-1.rtmp.t.me/s/"
+    }
+
     data class CustomRTMP(
         override val id: String = java.util.UUID.randomUUID().toString(),
         override val name: String = "Custom RTMP",
@@ -160,14 +183,13 @@ sealed class PlatformEndpoint {
  * 4. Ensures exactly one slash between endpoint URL and streamKey without double slashes ("//").
  */
 fun buildDestinationUrl(rawUrl: String, rawKey: String): String {
-    val cleanUrl = rawUrl.trim().removeSurrounding("\"").removeSurrounding("'")
-    val cleanKey = rawKey.trim().removeSurrounding("\"").removeSurrounding("'")
-    if (cleanKey.isEmpty()) return cleanUrl
-    val normalizedUrl = cleanUrl.trimEnd('/')
-    if (normalizedUrl.endsWith("/$cleanKey", ignoreCase = false) ||
-        normalizedUrl.endsWith("=$cleanKey", ignoreCase = false) ||
-        normalizedUrl == cleanKey) {
-        return normalizedUrl
+    val cleanBase = rawUrl.trim().removeSurrounding("\"").removeSurrounding("'").trimEnd('/')
+    val cleanKey = rawKey.trim().removeSurrounding("\"").removeSurrounding("'").trimStart('/')
+    if (cleanKey.isEmpty()) return cleanBase
+    if (cleanBase.endsWith("/$cleanKey", ignoreCase = false) ||
+        cleanBase.endsWith("=$cleanKey", ignoreCase = false) ||
+        cleanBase == cleanKey) {
+        return cleanBase
     }
-    return "$normalizedUrl/$cleanKey"
+    return "$cleanBase/$cleanKey"
 }

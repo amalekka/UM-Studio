@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -79,6 +80,38 @@ class MainViewModel : ViewModel() {
         val opacity: Float = 1f
     )
 
+    enum class WatermarkPosition { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
+
+    data class WatermarkConfig(
+        val isEnabled: Boolean = false,
+        val logoUri: String? = null,
+        val position: WatermarkPosition = WatermarkPosition.TOP_RIGHT,
+        val sizeDp: Int = 54,
+        val opacity: Float = 0.85f
+    )
+
+    data class TickerConfig(
+        val isEnabled: Boolean = false,
+        val text: String = "🔴 BREAKING NEWS • LIVE STREAM WORKSTATION • WELCOME TO THE BROADCAST • FOLLOW & SHARE",
+        val speed: Float = 1.0f,
+        val backgroundColor: Int = 0xE6090D16.toInt(),
+        val textColor: Int = 0xFFFFFFFF.toInt(),
+        val accentColor: Int = 0xFF00F2FF.toInt()
+    )
+
+    data class ScoreboardConfig(
+        val isEnabled: Boolean = false,
+        val teamAName: String = "TEAM A",
+        val teamBName: String = "TEAM B",
+        val teamAScore: Int = 0,
+        val teamBScore: Int = 0,
+        val matchTimeSeconds: Int = 0,
+        val isTimerRunning: Boolean = false,
+        val period: String = "1ST HALF",
+        val x: Float = 20f,
+        val y: Float = 70f
+    )
+
     data class BackgroundConfig(
         val imageUri: String? = null,
         val displayMode: ImageDisplayMode = ImageDisplayMode.FULL_IMAGE,
@@ -94,8 +127,12 @@ class MainViewModel : ViewModel() {
         val foregroundScale: Float = 1f,
         val foregroundPosition: ForegroundPosition = ForegroundPosition.CENTER,
         val isPauseShieldActive: Boolean = false,
+        val presetGradient: String? = null,
         val textOverlays: List<TextOverlay> = emptyList(),
-        val emojiOverlays: List<EmojiOverlay> = emptyList()
+        val emojiOverlays: List<EmojiOverlay> = emptyList(),
+        val ticker: TickerConfig = TickerConfig(),
+        val scoreboard: ScoreboardConfig = ScoreboardConfig(),
+        val watermark: WatermarkConfig = WatermarkConfig()
     )
 
     enum class BackgroundScaleMode { COVER, CONTAIN, TOP_BANNER, BOTTOM_BANNER, STRETCH }
@@ -106,7 +143,8 @@ class MainViewModel : ViewModel() {
         val name: String,
         val url: String,
         val userAgent: String = "",
-        val referer: String = ""
+        val referer: String = "",
+        val origin: String = ""
     )
 
     data class ChatMessage(
@@ -115,6 +153,21 @@ class MainViewModel : ViewModel() {
         val author: String,
         val message: String,
         val timestamp: Long = System.currentTimeMillis()
+    )
+
+    enum class SceneType {
+        MAIN_LIVE,
+        STARTING_SOON,
+        BE_RIGHT_BACK,
+        JUST_CHATTING,
+        CUSTOM
+    }
+
+    data class SceneItem(
+        val id: String = UUID.randomUUID().toString(),
+        val title: String,
+        val icon: String,
+        val type: SceneType = SceneType.MAIN_LIVE
     )
 
     data class UiState(
@@ -134,13 +187,25 @@ class MainViewModel : ViewModel() {
             PlatformEndpoint.Twitch(),
             PlatformEndpoint.Twitter(),
             PlatformEndpoint.Instagram(),
-            PlatformEndpoint.Kick()
+            PlatformEndpoint.Kick(),
+            PlatformEndpoint.Telegram()
         ),
         val m3u8Url: String = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8",
         val m3u8Headers: Map<String, String> = emptyMap(),
         val m3u8State: M3u8PlaybackState = M3u8PlaybackState.STOPPED,
         val isM3u8Muted: Boolean = false,
         val m3u8Volume: Float = 1.0f,
+        val m3u8AudioDelayMs: Int = 0,
+        val bgMusicVolume: Float = 0.5f,
+        val isBgMusicMuted: Boolean = false,
+        val isBgMusicPlaying: Boolean = false,
+        val bgMusicUri: String? = null,
+        val bgMusicName: String = "Ambient Cyber Beat (Loop)",
+        val isGainBoostEnabled: Boolean = false,
+        val isNoiseGateEnabled: Boolean = true,
+        val isEchoCancellationEnabled: Boolean = true,
+        val isAudioDuckingEnabled: Boolean = true,
+        val isDuckingActive: Boolean = false,
         val activeM3u8Name: String = "Apple BipBop HLS",
         val showScreenCapturePrompt: Boolean = false,
         val savedStreams: List<SavedStreamItem> = listOf(
@@ -176,7 +241,19 @@ class MainViewModel : ViewModel() {
         val isRecording: Boolean = false,
         val twitchChannel: String = "",
         val youtubeChannel: String = "",
-        val pinnedComment: ChatMessage? = null
+        val pinnedComment: ChatMessage? = null,
+        val scenes: List<SceneItem> = listOf(
+            SceneItem(id = "main", title = "Main Live", icon = "🎬", type = SceneType.MAIN_LIVE),
+            SceneItem(id = "starting_soon", title = "Starting Soon", icon = "⏳", type = SceneType.STARTING_SOON),
+            SceneItem(id = "brb", title = "Be Right Back", icon = "⏸️", type = SceneType.BE_RIGHT_BACK),
+            SceneItem(id = "just_chatting", title = "Just Chatting", icon = "🎙️", type = SceneType.JUST_CHATTING)
+        ),
+        val activeSceneId: String = "main",
+        val startingSoonCountdown: Int = 300,
+        val startingSoonTitle: String = "STREAM STARTING SOON",
+        val droppedFramesPercent: Float = 0.0f,
+        val cpuTemperature: String = "36°C",
+        val batteryLevel: Int = 88
     )
 
     private var pendingView: OpenGlView? = null
@@ -361,13 +438,31 @@ class MainViewModel : ViewModel() {
                     }
                 }}
                 launch { manager.audioLevelL.collect { levelL ->
+                    val isMicLive = _uiState.value.isStreaming && _uiState.value.isMicEnabled
+                    val effLevelL = if (isMicLive) levelL else 0f
+                    val speaking = effLevelL > 0.15f || _uiState.value.audioLevelR > 0.15f
+                    val ducking = _uiState.value.isAudioDuckingEnabled && speaking && isMicLive
+                    if (ducking != _uiState.value.isDuckingActive) {
+                        val targetVol = if (ducking) _uiState.value.m3u8Volume * 0.5f else _uiState.value.m3u8Volume
+                        if (!_uiState.value.isM3u8Muted) {
+                            service.getRestreamEngine()?.setM3u8Volume(targetVol)
+                        }
+                        if (!_uiState.value.isBgMusicMuted) {
+                            val bgTargetVol = if (ducking) _uiState.value.bgMusicVolume * 0.5f else _uiState.value.bgMusicVolume
+                            try {
+                                bgMusicPlayer?.setVolume(bgTargetVol, bgTargetVol)
+                            } catch (_: Exception) {}
+                        }
+                    }
                     _uiState.value = _uiState.value.copy(
-                        audioLevelL = if (_uiState.value.isStreaming && _uiState.value.isMicEnabled) levelL else 0f
+                        audioLevelL = effLevelL,
+                        isDuckingActive = ducking
                     )
                 }}
                 launch { manager.audioLevelR.collect { levelR ->
+                    val isMicLive = _uiState.value.isStreaming && _uiState.value.isMicEnabled
                     _uiState.value = _uiState.value.copy(
-                        audioLevelR = if (_uiState.value.isStreaming && _uiState.value.isMicEnabled) levelR else 0f
+                        audioLevelR = if (isMicLive) levelR else 0f
                     )
                 }}
                 launch { manager.isFlashOn.collect { flash ->
@@ -384,6 +479,17 @@ class MainViewModel : ViewModel() {
                 launch { pro.streamLogs.collect { logs ->
                     _uiState.value = _uiState.value.copy(logs = logs)
                 }}
+            }
+
+            // Background Match Timer loop
+            launch {
+                while (isActive) {
+                    delay(1000)
+                    val sb = _uiState.value.bgConfig.scoreboard
+                    if (sb.isEnabled && sb.isTimerRunning) {
+                        updateScoreboard(sb.copy(matchTimeSeconds = sb.matchTimeSeconds + 1))
+                    }
+                }
             }
         }
     }
@@ -411,6 +517,7 @@ class MainViewModel : ViewModel() {
                     is PlatformEndpoint.Twitter -> ep.copy(viewerCount = initialViewers)
                     is PlatformEndpoint.Instagram -> ep.copy(viewerCount = initialViewers)
                     is PlatformEndpoint.Kick -> ep.copy(viewerCount = initialViewers)
+                    is PlatformEndpoint.Telegram -> ep.copy(viewerCount = initialViewers)
                     is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = initialViewers)
                 }
             } else {
@@ -422,6 +529,7 @@ class MainViewModel : ViewModel() {
                     is PlatformEndpoint.Twitter -> ep.copy(viewerCount = 0)
                     is PlatformEndpoint.Instagram -> ep.copy(viewerCount = 0)
                     is PlatformEndpoint.Kick -> ep.copy(viewerCount = 0)
+                    is PlatformEndpoint.Telegram -> ep.copy(viewerCount = 0)
                     is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = 0)
                 }
             }
@@ -450,6 +558,7 @@ class MainViewModel : ViewModel() {
                                 is PlatformEndpoint.Twitter -> ep.copy(viewerCount = newCount)
                                 is PlatformEndpoint.Instagram -> ep.copy(viewerCount = newCount)
                                 is PlatformEndpoint.Kick -> ep.copy(viewerCount = newCount)
+                                is PlatformEndpoint.Telegram -> ep.copy(viewerCount = newCount)
                                 is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = newCount)
                             }
                         } else {
@@ -492,6 +601,7 @@ class MainViewModel : ViewModel() {
                 is PlatformEndpoint.Twitter -> ep.copy(viewerCount = 0)
                 is PlatformEndpoint.Instagram -> ep.copy(viewerCount = 0)
                 is PlatformEndpoint.Kick -> ep.copy(viewerCount = 0)
+                is PlatformEndpoint.Telegram -> ep.copy(viewerCount = 0)
                 is PlatformEndpoint.CustomRTMP -> ep.copy(viewerCount = 0)
             }
         }
@@ -548,6 +658,7 @@ class MainViewModel : ViewModel() {
                     is PlatformEndpoint.Twitter -> ep.copy(isEnabled = isEnabled)
                     is PlatformEndpoint.Instagram -> ep.copy(isEnabled = isEnabled)
                     is PlatformEndpoint.Kick -> ep.copy(isEnabled = isEnabled)
+                    is PlatformEndpoint.Telegram -> ep.copy(isEnabled = isEnabled)
                     is PlatformEndpoint.CustomRTMP -> ep.copy(isEnabled = isEnabled)
                 }
                 com.example.core.repository.DestinationsRepository.saveDestination(context, toggled)
@@ -584,267 +695,161 @@ class MainViewModel : ViewModel() {
     }
 
     fun startStream(context: Context, mediaProjectionResult: Intent? = null): Boolean {
-        val validEndpoints = _uiState.value.endpoints.filter {
-            it.isEnabled && it.streamKey.isNotBlank() && it.url.trim().length > 7
-        }
+        // 1. PRE-FLIGHT VALIDATION
+        val ui = _uiState.value
+        val validEndpoints = ui.endpoints.filter { it.isEnabled }
+        
         if (validEndpoints.isEmpty()) {
-            Toast.makeText(context, "Please enable at least one destination with a valid URL and Stream Key", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "No broadcast platforms enabled. Please enable at least one in Destinations.", Toast.LENGTH_LONG).show()
             return false
+        }
+        
+        val missingKeys = validEndpoints.filter { it.streamKey.isBlank() || it.url.trim().length < 8 }
+        if (missingKeys.isNotEmpty()) {
+            val names = missingKeys.joinToString(", ") { it.name }
+            Toast.makeText(context, "Missing Stream Key or URL for: $names", Toast.LENGTH_LONG).show()
+            return false
+        }
+
+        if (ui.currentSource == StreamSource.M3U8) {
+            val url = ui.m3u8Url.trim()
+            if (url.isBlank() || !(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("rtmp", true))) {
+                Toast.makeText(context, "Invalid Remote Source URL. Must start with http/https/rtmp", Toast.LENGTH_LONG).show()
+                return false
+            }
         }
 
         val currService = service
         if (currService == null) {
-            Toast.makeText(context, "Streaming service is initializing. Please wait a moment and try again.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Streaming Engine is starting. Please wait...", Toast.LENGTH_SHORT).show()
             try {
                 val intent = Intent(context, LiveStreamService::class.java)
                 context.startForegroundService(intent)
-            } catch (e: Exception) {}
+            } catch (t: Throwable) {
+                Log.e("MainViewModel", "Failed to start background service: ${t.message}")
+            }
             return false
         }
 
-        val config = _uiState.value.streamConfig.copy(endpoints = validEndpoints)
-        val state = _uiState.value
-
-        val allUrls = validEndpoints.map { ep ->
-            buildDestinationUrl(ep.url, ep.streamKey)
-        }
-        val primary = validEndpoints.first()
+        val config = ui.streamConfig.copy(endpoints = validEndpoints)
+        val allUrls = validEndpoints.map { buildDestinationUrl(it.url, it.streamKey) }
         val primaryUrl = allUrls.first()
+        val primaryName = validEndpoints.first().name
 
-        Log.i("MainViewModel", "Starting RTMP Stream to: $primaryUrl (total endpoints: ${allUrls.size})")
+        Log.i("MainViewModel", "Starting Secure Stream to: $primaryUrl (Platforms: ${allUrls.size})")
 
-        // UI THREAD: Update state immediately so GO LIVE responds instantly with 0ms delay
-        _uiState.value = _uiState.value.copy(
+        // 2. UI STATE: Instant response
+        _uiState.value = ui.copy(
             isStreaming = true,
             streamingStatus = StreamingStatus.CONNECTING,
-            diagnosticMessage = "Connecting to RTMP...",
+            diagnosticMessage = "Connecting...",
             diagnosticIsError = false
         )
 
-        // Dispatchers.IO: Run socket connections, encoding preparations, and FFmpeg asynchronously
+        // 3. EXECUTION: Thread Isolated & Guarded
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                when (state.currentSource) {
+                when (ui.currentSource) {
                     StreamSource.M3U8 -> {
-                        val restreamEngine = service?.getRestreamEngine()
-                        if (restreamEngine == null) {
-                            withContext(Dispatchers.Main) {
-                                _uiState.value = _uiState.value.copy(
-                                    isStreaming = false,
-                                    streamingStatus = StreamingStatus.IDLE,
-                                    diagnosticMessage = "Native Bridge Not Initialized",
-                                    diagnosticIsError = true
-                                )
-                                Toast.makeText(context, "Native streaming bridge not initialized", Toast.LENGTH_LONG).show()
-                            }
-                            return@launch
-                        }
-
-                        // SANITIZE AND VALIDATE URL
-                        val rawUrl = state.m3u8Url
-                        val cleanUrl = rawUrl.trim().replace("\"", "").replace("'", "")
+                        val restream = currService.getRestreamEngine() ?: throw IllegalStateException("Restream engine not ready")
+                        val cleanUrl = ui.m3u8Url.trim().replace("\"", "").replace("'", "")
                         
-                        if (cleanUrl.isBlank() || !(cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://") || cleanUrl.startsWith("rtmp"))) {
-                            withContext(Dispatchers.Main) {
-                                _uiState.value = _uiState.value.copy(
-                                    isStreaming = false,
-                                    streamingStatus = StreamingStatus.IDLE,
-                                    diagnosticMessage = "Invalid Remote URL",
-                                    diagnosticIsError = true
-                                )
-                                Toast.makeText(context, "Please enter a valid HTTP/HTTPS/RTMP source URL", Toast.LENGTH_LONG).show()
+                        // Main Thread Task: ExoPlayer Setup
+                        val canStreamCopy = withContext(Dispatchers.Main) {
+                            try {
+                                restream.setupRestream(cleanUrl, ui.m3u8Headers)
+                                restream.play()
+                                val isH264 = restream.isH264Source()
+                                val hasAudio = restream.hasAudioTrack()
+                                val hasOverlay = ui.bgConfig.imageUri != null && ui.bgConfig.displayMode != ImageDisplayMode.OFF
+                                (ui.preferM3u8StreamCopy && isH264 && hasAudio && !hasOverlay)
+                            } catch (et: Throwable) {
+                                Log.e("MainViewModel", "ExoPlayer setup failed: ${et.message}")
+                                false
                             }
-                            return@launch
                         }
 
-                        try {
-                            val hasOverlay = state.bgConfig.imageUri != null && state.bgConfig.displayMode != ImageDisplayMode.OFF
-                            val m3u8Headers = state.m3u8Headers
-                            val preferStreamCopy = state.preferM3u8StreamCopy
-
-                            // 1. ALL ExoPlayer setup, playback and format reading MUST run on Dispatchers.Main
-                            val canStreamCopy = withContext(Dispatchers.Main) {
-                                try {
-                                    restreamEngine.setupRestream(cleanUrl, m3u8Headers)
-                                    restreamEngine.play()
-                                    val isH264 = restreamEngine.isH264Source()
-                                    (preferStreamCopy && isH264 && !hasOverlay)
-                                } catch (e: Throwable) {
-                                    Log.e("MainViewModel", "Error in setupRestream on Main: ${e.message}", e)
-                                    false
-                                }
-                            }
-
-                            // 2. Keep ONLY FFmpegKit execution and RTMP sockets on Dispatchers.IO
-                            restreamEngine.startRestreaming(
-                                config = config,
-                                primaryUrl = primaryUrl,
-                                allUrls = allUrls,
-                                hasOverlay = hasOverlay,
-                                preferStreamCopy = preferStreamCopy,
-                                canStreamCopyOverride = canStreamCopy
-                            )
-                            withContext(Dispatchers.Main) {
-                                _uiState.value = _uiState.value.copy(
-                                    isStreaming = true,
-                                    streamingStatus = StreamingStatus.STREAMING
-                                )
-                                startTimer()
-                                val copyModeText = if (canStreamCopy) " (Ultra-Fast Copy)" else ""
-                                Toast.makeText(context, "Broadcasting M3U8 stream to ${primary.name}$copyModeText...", Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (e: Throwable) {
-                            Log.e("MainViewModel", "Error in M3U8 restream execution: ${e.message}", e)
-                            withContext(Dispatchers.Main) {
-                                _uiState.value = _uiState.value.copy(
-                                    isStreaming = false,
-                                    streamingStatus = StreamingStatus.IDLE,
-                                    diagnosticMessage = "Stream Error: ${e.message}",
-                                    diagnosticIsError = true
-                                )
-                                Toast.makeText(context, "Failed to start M3U8 restream: ${e.message}", Toast.LENGTH_LONG).show()
-                            }
+                        // IO Task: FFmpeg Launch
+                        restream.startRestreaming(
+                            config = config,
+                            primaryUrl = primaryUrl,
+                            allUrls = allUrls,
+                            hasOverlay = (ui.bgConfig.imageUri != null && ui.bgConfig.displayMode != ImageDisplayMode.OFF),
+                            preferStreamCopy = ui.preferM3u8StreamCopy,
+                            canStreamCopyOverride = canStreamCopy
+                        )
+                        
+                        withContext(Dispatchers.Main) {
+                            startTimer()
+                            Toast.makeText(context, "Broadcasting $primaryName...", Toast.LENGTH_SHORT).show()
                         }
                     }
                     StreamSource.CAMERA -> {
-                        service?.getStreamManager()?.let { manager ->
-                            if (!manager.isStreaming()) {
-                                withContext(Dispatchers.Main) {
-                                    manager.startPreview()
-                                }
+                        val manager = currService.getStreamManager() ?: throw IllegalStateException("Stream manager not ready")
+                        withContext(Dispatchers.Main) { manager.startPreview() }
+                        
+                        val prepared = manager.prepareStream(config)
+                        if (prepared) {
+                            manager.startStream(primaryUrl)
+                            startExtraDestinations(currService, validEndpoints, allUrls)
+                            withContext(Dispatchers.Main) {
+                                startTimer()
+                                Toast.makeText(context, "Live on $primaryName", Toast.LENGTH_SHORT).show()
                             }
-                            val prepared = manager.prepareStream(config)
-                            if (prepared) {
-                                manager.startStream(primaryUrl)
-                                if (validEndpoints.size > 1) {
-                                    service?.getProManager()?.let { pro ->
-                                        validEndpoints.drop(1).forEachIndexed { index, extra ->
-                                            val extraUrl = allUrls[index + 1]
-                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl))
-                                        }
-                                        pro.startMultiStreaming()
-                                    }
-                                }
-                                withContext(Dispatchers.Main) {
-                                    _uiState.value = _uiState.value.copy(
-                                        isStreaming = true,
-                                        streamingStatus = StreamingStatus.STREAMING
-                                    )
-                                    startTimer()
-                                    Toast.makeText(context, "Broadcasting live to ${primary.name}...", Toast.LENGTH_SHORT).show()
-                                }
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    _uiState.value = _uiState.value.copy(
-                                        isStreaming = false,
-                                        streamingStatus = StreamingStatus.IDLE,
-                                        diagnosticMessage = "Encoder Prepare Failed",
-                                        diagnosticIsError = true
-                                    )
-                                    Toast.makeText(context, "Failed to initialize video/audio encoder for streaming.", Toast.LENGTH_LONG).show()
-                                }
-                            }
+                        } else {
+                            throw IllegalStateException("Encoder initialization failed")
                         }
                     }
                     StreamSource.SCREEN -> {
-                        val projectionIntent = mediaProjectionResult ?: cachedMediaProjectionResult
-                        if (projectionIntent == null) {
+                        val projection = mediaProjectionResult ?: cachedMediaProjectionResult
+                        if (projection == null) {
                             withContext(Dispatchers.Main) {
-                                _uiState.value = _uiState.value.copy(
-                                    isStreaming = false,
-                                    streamingStatus = StreamingStatus.IDLE,
-                                    showScreenCapturePrompt = true,
-                                    diagnosticMessage = "Capture Permission Required",
-                                    diagnosticIsError = true
-                                )
-                                Toast.makeText(context, "Please grant Screen Capture permission first", Toast.LENGTH_SHORT).show()
+                                _uiState.value = _uiState.value.copy(isStreaming = false, streamingStatus = StreamingStatus.IDLE, showScreenCapturePrompt = true)
+                                Toast.makeText(context, "Screen permission required", Toast.LENGTH_SHORT).show()
                             }
                             return@launch
                         }
-                        upgradeToMediaProjection()
-                        service?.getStreamManager()?.let { manager ->
-                            val prepared = manager.prepareStream(config)
-                            if (prepared) {
-                                manager.startStream(primaryUrl, projectionIntent)
-                                if (validEndpoints.size > 1) {
-                                    service?.getProManager()?.let { pro ->
-                                        validEndpoints.drop(1).forEachIndexed { index, extra ->
-                                            val extraUrl = allUrls[index + 1]
-                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl))
-                                        }
-                                        pro.startMultiStreaming()
-                                    }
-                                }
-                                withContext(Dispatchers.Main) {
-                                    _uiState.value = _uiState.value.copy(
-                                        isStreaming = true,
-                                        streamingStatus = StreamingStatus.STREAMING
-                                    )
-                                    startTimer()
-                                    Toast.makeText(context, "Broadcasting full screen to ${primary.name}...", Toast.LENGTH_SHORT).show()
-                                }
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    _uiState.value = _uiState.value.copy(
-                                        isStreaming = false,
-                                        streamingStatus = StreamingStatus.IDLE,
-                                        diagnosticMessage = "Screen Capture Failed",
-                                        diagnosticIsError = true
-                                    )
-                                    Toast.makeText(context, "Failed to initialize screen capture encoder.", Toast.LENGTH_LONG).show()
-                                }
+                        currService.upgradeToMediaProjection()
+                        val manager = currService.getStreamManager() ?: throw IllegalStateException("Stream manager not ready")
+                        
+                        if (manager.prepareStream(config)) {
+                            manager.startStream(primaryUrl, projection)
+                            startExtraDestinations(currService, validEndpoints, allUrls)
+                            withContext(Dispatchers.Main) {
+                                startTimer()
+                                Toast.makeText(context, "Capturing Screen to $primaryName", Toast.LENGTH_SHORT).show()
                             }
+                        } else {
+                            throw IllegalStateException("Screen encoder failed")
                         }
                     }
                     StreamSource.AUDIO -> {
-                        service?.getStreamManager()?.let { manager ->
-                            val prepared = manager.prepareStream(config)
-                            if (prepared) {
-                                manager.startStream(primaryUrl)
-                                if (validEndpoints.size > 1) {
-                                    service?.getProManager()?.let { pro ->
-                                        validEndpoints.drop(1).forEachIndexed { index, extra ->
-                                            val extraUrl = allUrls[index + 1]
-                                            pro.addExtraEndpoint(extra.copyWithUrl(extraUrl))
-                                        }
-                                        pro.startMultiStreaming()
-                                    }
-                                }
-                                withContext(Dispatchers.Main) {
-                                    _uiState.value = _uiState.value.copy(
-                                        isStreaming = true,
-                                        streamingStatus = StreamingStatus.STREAMING
-                                    )
-                                    startTimer()
-                                    Toast.makeText(context, "Broadcasting Audio-Only to ${primary.name}...", Toast.LENGTH_SHORT).show()
-                                }
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    _uiState.value = _uiState.value.copy(
-                                        isStreaming = false,
-                                        streamingStatus = StreamingStatus.IDLE,
-                                        diagnosticMessage = "Audio Prepare Failed",
-                                        diagnosticIsError = true
-                                    )
-                                    Toast.makeText(context, "Failed to initialize audio encoder.", Toast.LENGTH_LONG).show()
-                                }
+                        val manager = currService.getStreamManager() ?: throw IllegalStateException("Stream manager not ready")
+                        if (manager.prepareStream(config)) {
+                            manager.startStream(primaryUrl)
+                            startExtraDestinations(currService, validEndpoints, allUrls)
+                            withContext(Dispatchers.Main) {
+                                startTimer()
+                                Toast.makeText(context, "Broadcasting Audio to $primaryName", Toast.LENGTH_SHORT).show()
                             }
+                        } else {
+                            throw IllegalStateException("Audio encoder failed")
                         }
                     }
                 }
             } catch (e: Throwable) {
-                Log.e("MainViewModel", "Fatal error in startStream: ${e.message}", e)
+                Log.e("MainViewModel", "CRITICAL STREAM FAILURE: ${e.message}", e)
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(
                         isStreaming = false,
                         streamingStatus = StreamingStatus.ERROR,
-                        diagnosticMessage = "Fatal Error: ${e.javaClass.simpleName}",
+                        diagnosticMessage = "Error: ${e.javaClass.simpleName}",
                         diagnosticIsError = true
                     )
-                    Toast.makeText(context, "System Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Broadcasting Failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
-                // LOCK STATS TO ZERO IF IDLE
+                // Ensure telemetry is zeroed if start failed or stopped immediately
                 if (!_uiState.value.isStreaming) {
                     withContext(Dispatchers.Main) {
                         _uiState.value = _uiState.value.copy(currentBitrate = 0, fps = 0)
@@ -853,6 +858,21 @@ class MainViewModel : ViewModel() {
             }
         }
         return true
+    }
+
+    private fun startExtraDestinations(service: LiveStreamService, endpoints: List<PlatformEndpoint>, urls: List<String>) {
+        if (endpoints.size > 1) {
+            try {
+                val pro = service.getProManager() ?: return
+                endpoints.drop(1).forEachIndexed { index, ep ->
+                    val extraUrl = urls[index + 1]
+                    pro.addExtraEndpoint(ep.copyWithUrl(extraUrl))
+                }
+                pro.startMultiStreaming()
+            } catch (t: Throwable) {
+                Log.e("MainViewModel", "Multi-streaming error: ${t.message}")
+            }
+        }
     }
 
     private fun PlatformEndpoint.copyWithUrl(newUrl: String): PlatformEndpoint {
@@ -864,8 +884,55 @@ class MainViewModel : ViewModel() {
             is PlatformEndpoint.Twitter -> this.copy(url = newUrl)
             is PlatformEndpoint.Instagram -> this.copy(url = newUrl)
             is PlatformEndpoint.Kick -> this.copy(url = newUrl)
+            is PlatformEndpoint.Telegram -> this.copy(url = newUrl)
             is PlatformEndpoint.CustomRTMP -> this.copy(url = newUrl)
         }
+    }
+
+    fun updateDestinationCredentials(context: Context, id: String, url: String, key: String) {
+        val updated = _uiState.value.endpoints.map { ep ->
+            if (ep.id == id) {
+                val modified = when (ep) {
+                    is PlatformEndpoint.YouTube -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.Facebook -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.TikTok -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.Twitch -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.Twitter -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.Instagram -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.Kick -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.Telegram -> ep.copy(url = url.trim(), streamKey = key.trim())
+                    is PlatformEndpoint.CustomRTMP -> ep.copy(url = url.trim(), streamKey = key.trim())
+                }
+                com.example.core.repository.DestinationsRepository.saveDestination(context, modified)
+                modified
+            } else {
+                ep
+            }
+        }
+        _uiState.value = _uiState.value.copy(endpoints = updated)
+    }
+
+    fun exportProfileBackup(context: Context): String {
+        return com.example.core.repository.DestinationsRepository.exportProfileBackupJson(context)
+    }
+
+    fun restoreProfileBackup(context: Context, json: String): Boolean {
+        return try {
+            val restored = com.example.core.repository.DestinationsRepository.restoreProfileBackupJson(context, json)
+            if (restored.isNotEmpty()) {
+                _uiState.value = _uiState.value.copy(endpoints = restored)
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to restore profile backup", e)
+            false
+        }
+    }
+
+    fun updateStreamConfig(config: StreamConfig) {
+        _uiState.value = _uiState.value.copy(streamConfig = config)
     }
 
     fun togglePauseStream() {
@@ -1096,6 +1163,7 @@ class MainViewModel : ViewModel() {
         val headers = mutableMapOf<String, String>()
         if (stream.userAgent.isNotBlank()) headers["User-Agent"] = stream.userAgent
         if (stream.referer.isNotBlank()) headers["Referer"] = stream.referer
+        if (stream.origin.isNotBlank()) headers["Origin"] = stream.origin
         playM3u8(url = stream.url, name = stream.name, headers = headers)
     }
 
@@ -1108,6 +1176,10 @@ class MainViewModel : ViewModel() {
     }
 
     fun getRestreamEngine(): com.example.core.streaming.M3u8RestreamEngine? = service?.getRestreamEngine()
+
+    fun getM3u8Health(): com.example.core.streaming.M3u8RestreamEngine.StreamHealth {
+        return getRestreamEngine()?.getStreamHealth() ?: com.example.core.streaming.M3u8RestreamEngine.StreamHealth()
+    }
 
     fun setImageDisplayMode(mode: ImageDisplayMode) {
         val updated = _uiState.value.bgConfig.copy(displayMode = mode)
@@ -1128,26 +1200,28 @@ class MainViewModel : ViewModel() {
         playM3u8(url = url, headers = headers)
     }
 
-    fun saveStream(name: String, url: String, userAgent: String = "", referer: String = "") {
+    fun saveStream(name: String, url: String, userAgent: String = "", referer: String = "", origin: String = "") {
         if (name.isBlank() || url.isBlank()) return
         val current = _uiState.value.savedStreams.toMutableList()
         current.add(SavedStreamItem(
             name = name.trim(),
             url = url.trim(),
             userAgent = userAgent.trim(),
-            referer = referer.trim()
+            referer = referer.trim(),
+            origin = origin.trim()
         ))
         _uiState.value = _uiState.value.copy(savedStreams = current)
     }
 
-    fun updateSavedStream(id: String, name: String, url: String, userAgent: String = "", referer: String = "") {
+    fun updateSavedStream(id: String, name: String, url: String, userAgent: String = "", referer: String = "", origin: String = "") {
         val updated = _uiState.value.savedStreams.map { item ->
             if (item.id == id) {
                 item.copy(
                     name = name.trim().ifEmpty { item.name },
                     url = url.trim().ifEmpty { item.url },
                     userAgent = userAgent.trim(),
-                    referer = referer.trim()
+                    referer = referer.trim(),
+                    origin = origin.trim()
                 )
             } else item
         }
@@ -1157,6 +1231,38 @@ class MainViewModel : ViewModel() {
     fun deleteStream(id: String) {
         val filtered = _uiState.value.savedStreams.filterNot { it.id == id }
         _uiState.value = _uiState.value.copy(savedStreams = filtered)
+    }
+
+    fun importM3uPlaylist(content: String): Int {
+        val lines = content.lines()
+        var currentName = ""
+        var importedCount = 0
+        val newItems = mutableListOf<SavedStreamItem>()
+
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("#EXTINF", ignoreCase = true)) {
+                val commaIndex = trimmed.lastIndexOf(',')
+                currentName = if (commaIndex != -1 && commaIndex < trimmed.length - 1) {
+                    trimmed.substring(commaIndex + 1).trim()
+                } else {
+                    "Channel ${newItems.size + 1}"
+                }
+            } else if (trimmed.isNotBlank() && !trimmed.startsWith("#")) {
+                val url = trimmed
+                val name = if (currentName.isNotBlank()) currentName else "Channel ${newItems.size + 1}"
+                newItems.add(SavedStreamItem(name = name, url = url))
+                currentName = ""
+                importedCount++
+            }
+        }
+
+        if (newItems.isNotEmpty()) {
+            val existing = _uiState.value.savedStreams.toMutableList()
+            existing.addAll(newItems)
+            _uiState.value = _uiState.value.copy(savedStreams = existing)
+        }
+        return importedCount
     }
 
     fun toggleMic(enabled: Boolean) {
@@ -1419,6 +1525,188 @@ class MainViewModel : ViewModel() {
                 Toast.makeText(context, "Failed to start local recording", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    fun selectScene(sceneId: String) {
+        val scene = _uiState.value.scenes.find { it.id == sceneId } ?: return
+        _uiState.value = _uiState.value.copy(activeSceneId = sceneId)
+        
+        if (scene.type == SceneType.BE_RIGHT_BACK) {
+            val bgConfig = _uiState.value.bgConfig.copy(isPauseShieldActive = true)
+            updateBackgroundConfig(bgConfig)
+        } else if (!_uiState.value.isPaused) {
+            val bgConfig = _uiState.value.bgConfig.copy(isPauseShieldActive = false)
+            updateBackgroundConfig(bgConfig)
+        }
+    }
+
+    fun addCustomScene(title: String, icon: String) {
+        if (title.isBlank()) return
+        val newScene = SceneItem(
+            title = title.trim(),
+            icon = if (icon.isBlank()) "🎥" else icon.trim(),
+            type = SceneType.CUSTOM
+        )
+        _uiState.value = _uiState.value.copy(
+            scenes = _uiState.value.scenes + newScene,
+            activeSceneId = newScene.id
+        )
+    }
+
+    fun removeCustomScene(sceneId: String) {
+        if (sceneId in listOf("main", "starting_soon", "brb", "just_chatting")) return
+        val updated = _uiState.value.scenes.filterNot { it.id == sceneId }
+        val newActive = if (_uiState.value.activeSceneId == sceneId) "main" else _uiState.value.activeSceneId
+        _uiState.value = _uiState.value.copy(scenes = updated, activeSceneId = newActive)
+    }
+
+    fun setStartingSoonCountdown(seconds: Int) {
+        _uiState.value = _uiState.value.copy(startingSoonCountdown = seconds)
+    }
+
+    private var bgMusicPlayer: android.media.MediaPlayer? = null
+
+    fun setScoreboardEnabled(enabled: Boolean) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(scoreboard = current.scoreboard.copy(isEnabled = enabled))
+        updateBackgroundConfig(updated)
+    }
+
+    fun updateScoreboard(scoreboard: ScoreboardConfig) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(scoreboard = scoreboard)
+        updateBackgroundConfig(updated)
+    }
+
+    fun adjustScoreA(delta: Int) {
+        val sb = _uiState.value.bgConfig.scoreboard
+        val newScore = (sb.teamAScore + delta).coerceAtLeast(0)
+        updateScoreboard(sb.copy(teamAScore = newScore))
+    }
+
+    fun adjustScoreB(delta: Int) {
+        val sb = _uiState.value.bgConfig.scoreboard
+        val newScore = (sb.teamBScore + delta).coerceAtLeast(0)
+        updateScoreboard(sb.copy(teamBScore = newScore))
+    }
+
+    fun toggleMatchTimer() {
+        val sb = _uiState.value.bgConfig.scoreboard
+        updateScoreboard(sb.copy(isTimerRunning = !sb.isTimerRunning))
+    }
+
+    fun resetMatchTimer() {
+        val sb = _uiState.value.bgConfig.scoreboard
+        updateScoreboard(sb.copy(matchTimeSeconds = 0, isTimerRunning = false))
+    }
+
+    fun setTickerEnabled(enabled: Boolean) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(ticker = current.ticker.copy(isEnabled = enabled))
+        updateBackgroundConfig(updated)
+    }
+
+    fun updateTicker(ticker: TickerConfig) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(ticker = ticker)
+        updateBackgroundConfig(updated)
+    }
+
+    fun setWatermarkEnabled(enabled: Boolean) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(watermark = current.watermark.copy(isEnabled = enabled))
+        updateBackgroundConfig(updated)
+    }
+
+    fun updateWatermark(watermark: WatermarkConfig) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(watermark = watermark)
+        updateBackgroundConfig(updated)
+    }
+
+    fun setPresetGradient(gradientName: String?) {
+        val current = _uiState.value.bgConfig
+        val updated = current.copy(presetGradient = gradientName)
+        updateBackgroundConfig(updated)
+    }
+
+    fun setM3u8AudioDelay(delayMs: Int) {
+        _uiState.value = _uiState.value.copy(m3u8AudioDelayMs = delayMs)
+    }
+
+    fun setBgMusicVolume(volume: Float) {
+        _uiState.value = _uiState.value.copy(bgMusicVolume = volume)
+        val effectiveVol = if (_uiState.value.isBgMusicMuted) 0f else volume
+        try {
+            bgMusicPlayer?.setVolume(effectiveVol, effectiveVol)
+        } catch (_: Exception) {}
+    }
+
+    fun toggleBgMusicMute() {
+        val newMute = !_uiState.value.isBgMusicMuted
+        _uiState.value = _uiState.value.copy(isBgMusicMuted = newMute)
+        val effectiveVol = if (newMute) 0f else _uiState.value.bgMusicVolume
+        try {
+            bgMusicPlayer?.setVolume(effectiveVol, effectiveVol)
+        } catch (_: Exception) {}
+    }
+
+    fun setBgMusicUri(context: Context, uri: Uri, fileName: String) {
+        try {
+            bgMusicPlayer?.stop()
+            bgMusicPlayer?.release()
+            bgMusicPlayer = null
+        } catch (_: Exception) {}
+        _uiState.value = _uiState.value.copy(
+            bgMusicUri = uri.toString(),
+            bgMusicName = fileName,
+            isBgMusicPlaying = false
+        )
+    }
+
+    fun toggleBgMusicPlaying(context: Context) {
+        val currentState = _uiState.value
+        if (currentState.isBgMusicPlaying) {
+            try {
+                bgMusicPlayer?.pause()
+            } catch (_: Exception) {}
+            _uiState.value = _uiState.value.copy(isBgMusicPlaying = false)
+        } else {
+            try {
+                if (bgMusicPlayer == null && currentState.bgMusicUri != null) {
+                    bgMusicPlayer = android.media.MediaPlayer.create(context, Uri.parse(currentState.bgMusicUri))
+                }
+                if (bgMusicPlayer != null) {
+                    bgMusicPlayer?.isLooping = true
+                    val vol = if (currentState.isBgMusicMuted) 0f else currentState.bgMusicVolume
+                    bgMusicPlayer?.setVolume(vol, vol)
+                    bgMusicPlayer?.start()
+                    _uiState.value = _uiState.value.copy(isBgMusicPlaying = true)
+                } else {
+                    // Generative ambient notification or placeholder
+                    Toast.makeText(context, "Select an MP3 loop to start background music", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Audio error: ${e.message}", Toast.LENGTH_SHORT).show()
+                _uiState.value = _uiState.value.copy(isBgMusicPlaying = false)
+            }
+        }
+    }
+
+    fun toggleGainBoost() {
+        _uiState.value = _uiState.value.copy(isGainBoostEnabled = !_uiState.value.isGainBoostEnabled)
+    }
+
+    fun toggleNoiseGate() {
+        _uiState.value = _uiState.value.copy(isNoiseGateEnabled = !_uiState.value.isNoiseGateEnabled)
+    }
+
+    fun toggleEchoCancellation() {
+        _uiState.value = _uiState.value.copy(isEchoCancellationEnabled = !_uiState.value.isEchoCancellationEnabled)
+    }
+
+    fun toggleAudioDucking() {
+        _uiState.value = _uiState.value.copy(isAudioDuckingEnabled = !_uiState.value.isAudioDuckingEnabled)
     }
 
     fun shutdownApp(context: Context) {

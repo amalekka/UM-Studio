@@ -18,8 +18,11 @@ class AudioSfxManager {
         AIRHORN,
         APPLAUSE,
         GOAL,
+        WHISTLE,
         LAUGH,
-        CHEER
+        DRUMROLL,
+        CHEER,
+        BUZZER
     }
 
     fun playSfx(type: SfxType) {
@@ -30,8 +33,11 @@ class AudioSfxManager {
                     SfxType.AIRHORN -> generateAirhorn(sampleRate)
                     SfxType.APPLAUSE -> generateApplause(sampleRate)
                     SfxType.GOAL -> generateGoal(sampleRate)
+                    SfxType.WHISTLE -> generateWhistle(sampleRate)
                     SfxType.LAUGH -> generateLaugh(sampleRate)
+                    SfxType.DRUMROLL -> generateDrumroll(sampleRate)
                     SfxType.CHEER -> generateCheer(sampleRate)
+                    SfxType.BUZZER -> generateBuzzer(sampleRate)
                 }
 
                 playPcmBuffer(pcmData, sampleRate)
@@ -152,6 +158,59 @@ class AudioSfxManager {
             }
             val envelope = if (t > 1.0) (1.5 - t) / 0.5 else 1.0
             val sample = (sum / chord.size) * envelope * 0.4
+            buffer[i] = (sample * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return buffer
+    }
+
+    private fun generateWhistle(sampleRate: Int): ShortArray {
+        val durationSec = 1.2
+        val numSamples = (sampleRate * durationSec).toInt()
+        val buffer = ShortArray(numSamples)
+        for (i in 0 until numSamples) {
+            val t = i.toDouble() / sampleRate
+            val tremolo = (sin(2.0 * Math.PI * 25.0 * t) + 1.0) / 2.0
+            val freq = 2600.0 + tremolo * 400.0
+            val env = when {
+                t < 0.08 -> t / 0.08
+                t > 1.0 -> (1.2 - t) / 0.2
+                else -> 1.0
+            }
+            val sample = sin(2.0 * Math.PI * freq * t) * env * 0.45
+            buffer[i] = (sample * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return buffer
+    }
+
+    private fun generateDrumroll(sampleRate: Int): ShortArray {
+        val durationSec = 1.8
+        val numSamples = (sampleRate * durationSec).toInt()
+        val buffer = ShortArray(numSamples)
+        val random = java.util.Random()
+        for (i in 0 until numSamples) {
+            val t = i.toDouble() / sampleRate
+            val tapRate = 18.0 + (t / durationSec) * 12.0
+            val tapPhase = (t * tapRate) % 1.0
+            val tapEnv = Math.exp(-tapPhase * 8.0)
+            val noise = (random.nextDouble() * 2.0 - 1.0)
+            val buildUp = (0.3 + 0.7 * (t / durationSec))
+            val sample = noise * tapEnv * buildUp * 0.4
+            buffer[i] = (sample * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return buffer
+    }
+
+    private fun generateBuzzer(sampleRate: Int): ShortArray {
+        val durationSec = 1.0
+        val numSamples = (sampleRate * durationSec).toInt()
+        val buffer = ShortArray(numSamples)
+        for (i in 0 until numSamples) {
+            val t = i.toDouble() / sampleRate
+            val tone1 = sin(2.0 * Math.PI * 140.0 * t)
+            val tone2 = sin(2.0 * Math.PI * 210.0 * t)
+            val tone3 = sin(2.0 * Math.PI * 350.0 * t)
+            val env = if (t > 0.85) (1.0 - t) / 0.15 else 1.0
+            val sample = (tone1 * 0.5 + tone2 * 0.3 + tone3 * 0.2) * env * 0.45
             buffer[i] = (sample * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
         }
         return buffer

@@ -8,10 +8,12 @@ import org.koin.core.context.startKoin
 class LiveStreamApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        startKoin {
-            androidLogger()
-            androidContext(this@LiveStreamApplication)
-            modules(emptyList()) // Modules will be added later
+        if (org.koin.core.context.GlobalContext.getOrNull() == null) {
+            startKoin {
+                androidLogger()
+                androidContext(this@LiveStreamApplication)
+                modules(emptyList()) // Modules will be added later
+            }
         }
     }
 }

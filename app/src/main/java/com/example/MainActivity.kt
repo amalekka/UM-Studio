@@ -36,19 +36,26 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.values.all { it }) {
-            startStreamService()
+        try {
+            if (permissions.values.all { it }) {
+                startStreamService()
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("MainActivity", "Permission result processing failed", t)
         }
     }
 
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            // We need to upgrade the service type BEFORE starting the stream
-            // This is a requirement for SDK 36
-            mServiceConnection.service?.upgradeToMediaProjection()
-            viewModel?.startStream(this, result.data)
+        try {
+            if (result.resultCode == RESULT_OK && result.data != null) {
+                // We need to upgrade the service type BEFORE starting the stream
+                mServiceConnection.service?.upgradeToMediaProjection()
+                viewModel?.startStream(this, result.data)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("MainActivity", "Media projection result failed", t)
         }
     }
 
@@ -124,9 +131,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startStreamService() {
-        val intent = Intent(this, LiveStreamService::class.java)
-        startForegroundService(intent)
-        bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE)
+        try {
+            val intent = Intent(this, LiveStreamService::class.java)
+            startForegroundService(intent)
+            bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE)
+        } catch (t: Throwable) {
+            android.util.Log.e("MainActivity", "Failed to start/bind streaming service", t)
+        }
     }
 
     fun requestScreenCapture() {

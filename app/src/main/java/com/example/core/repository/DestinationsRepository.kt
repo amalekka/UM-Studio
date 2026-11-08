@@ -25,6 +25,7 @@ object DestinationsRepository {
     const val DEFAULT_TWITTER_URL = "rtmps://prod-fastly-us-east-1.video.pscp.tv:443/x/"
     const val DEFAULT_INSTAGRAM_URL = "rtmps://live-upload.instagram.com:443/rtmp/"
     const val DEFAULT_KICK_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net/app/"
+    const val DEFAULT_TELEGRAM_URL = "rtmps://dc4-1.rtmp.t.me/s/"
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -79,7 +80,13 @@ object DestinationsRepository {
         val kickEnabled = prefs.getBoolean("platform_kick_enabled", false)
         list.add(PlatformEndpoint.Kick(streamKey = kickKey, isEnabled = kickEnabled, url = kickUrl))
 
-        // 8. Custom RTMP Servers
+        // 8. Telegram Live
+        val tgUrl = prefs.getString("platform_telegram_url", DEFAULT_TELEGRAM_URL) ?: DEFAULT_TELEGRAM_URL
+        val tgKey = prefs.getString("platform_telegram_key", "") ?: ""
+        val tgEnabled = prefs.getBoolean("platform_telegram_enabled", false)
+        list.add(PlatformEndpoint.Telegram(streamKey = tgKey, isEnabled = tgEnabled, url = tgUrl))
+
+        // 9. Custom RTMP Servers
         val customJson = prefs.getString(KEY_CUSTOM_DESTINATIONS, null)
         if (!customJson.isNullOrBlank()) {
             try {
@@ -237,10 +244,70 @@ object DestinationsRepository {
             "twitter" -> PlatformEndpoint.Twitter(streamKey = "", isEnabled = false, url = DEFAULT_TWITTER_URL)
             "instagram" -> PlatformEndpoint.Instagram(streamKey = "", isEnabled = false, url = DEFAULT_INSTAGRAM_URL)
             "kick" -> PlatformEndpoint.Kick(streamKey = "", isEnabled = false, url = DEFAULT_KICK_URL)
+            "telegram" -> PlatformEndpoint.Telegram(streamKey = "", isEnabled = false, url = DEFAULT_TELEGRAM_URL)
             else -> PlatformEndpoint.CustomRTMP(name = "Custom RTMP", url = "rtmp://", streamKey = "", isEnabled = false)
         }
         saveDestination(context, defaultEndpoint)
         return defaultEndpoint
+    }
+
+    /**
+     * Exports all configured stream destinations and keys as a portable JSON profile backup.
+     */
+    fun exportProfileBackupJson(context: Context): String {
+        val destinations = loadDestinations(context)
+        val root = JSONObject()
+        root.put("version", 1)
+        root.put("timestamp", System.currentTimeMillis())
+        val array = JSONArray()
+        destinations.forEach { ep ->
+            val item = JSONObject().apply {
+                put("id", ep.id)
+                put("name", ep.name)
+                put("url", ep.url)
+                put("streamKey", ep.streamKey)
+                put("isEnabled", ep.isEnabled)
+                put("isCustom", ep is PlatformEndpoint.CustomRTMP)
+            }
+            array.put(item)
+        }
+        root.put("destinations", array)
+        return root.toString(2)
+    }
+
+    /**
+     * Restores destinations and keys from a JSON profile backup string into persistent storage.
+     */
+    fun restoreProfileBackupJson(context: Context, jsonStr: String): List<PlatformEndpoint> {
+        val root = JSONObject(jsonStr)
+        val array = root.getJSONArray("destinations")
+        val restoredList = mutableListOf<PlatformEndpoint>()
+        for (i in 0 until array.length()) {
+            val item = array.getJSONObject(i)
+            val id = item.optString("id")
+            val name = item.optString("name")
+            val url = item.optString("url")
+            val streamKey = item.optString("streamKey")
+            val isEnabled = item.optBoolean("isEnabled", false)
+            val isCustom = item.optBoolean("isCustom", false)
+
+            val endpoint: PlatformEndpoint = when (id.lowercase()) {
+                "youtube" -> PlatformEndpoint.YouTube(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "facebook" -> PlatformEndpoint.Facebook(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "tiktok" -> PlatformEndpoint.TikTok(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "twitch" -> PlatformEndpoint.Twitch(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "twitter" -> PlatformEndpoint.Twitter(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "instagram" -> PlatformEndpoint.Instagram(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "kick" -> PlatformEndpoint.Kick(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                "telegram" -> PlatformEndpoint.Telegram(streamKey = streamKey, isEnabled = isEnabled, url = url)
+                else -> PlatformEndpoint.CustomRTMP(id = id, name = name, url = url, streamKey = streamKey, isEnabled = isEnabled)
+            }
+            restoredList.add(endpoint)
+        }
+        if (restoredList.isNotEmpty()) {
+            saveAllDestinations(context, restoredList)
+        }
+        return restoredList
     }
 
     /**

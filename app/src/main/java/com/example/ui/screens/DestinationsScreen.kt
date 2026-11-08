@@ -257,6 +257,7 @@ fun DestinationsScreen(viewModel: MainViewModel) {
                             is PlatformEndpoint.Twitter -> endpoint.copy(url = updatedUrl, streamKey = updatedKey)
                             is PlatformEndpoint.Instagram -> endpoint.copy(url = updatedUrl, streamKey = updatedKey)
                             is PlatformEndpoint.Kick -> endpoint.copy(url = updatedUrl, streamKey = updatedKey)
+                            is PlatformEndpoint.Telegram -> endpoint.copy(url = updatedUrl, streamKey = updatedKey)
                             is PlatformEndpoint.CustomRTMP -> endpoint.copy(url = updatedUrl, streamKey = updatedKey)
                         }
                         viewModel.saveDestination(context, updated)
@@ -1331,6 +1332,7 @@ fun getPlatformMeta(id: String): PlatformMeta {
         "twitter" -> PlatformMeta(Icons.Default.AlternateEmail, Color(0xFF38BDF8))
         "instagram" -> PlatformMeta(Icons.Default.CameraAlt, Color(0xFFE1306C))
         "kick" -> PlatformMeta(Icons.Default.Bolt, Color(0xFF53FC18))
+        "telegram" -> PlatformMeta(Icons.Default.Send, Color(0xFF229ED9))
         else -> PlatformMeta(Icons.Default.Dns, Color(0xFF06B6D4))
     }
 }

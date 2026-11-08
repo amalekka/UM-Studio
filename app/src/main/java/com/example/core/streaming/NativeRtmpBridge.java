@@ -58,6 +58,10 @@ public class NativeRtmpBridge {
         }
     }
 
+    private long activeSessionId = -1;
+    private int reconnectAttempts = 0;
+    private static final int MAX_RECONNECT_ATTEMPTS = 3;
+
     private String buildOutputArgs(String rtmpUrlsJson) {
         try {
             if (rtmpUrlsJson == null || rtmpUrlsJson.trim().isEmpty()) return "";
@@ -107,42 +111,50 @@ public class NativeRtmpBridge {
                     return;
                 }
 
-                int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
+                int br = (bitrate >= 1500 && bitrate <= 6000) ? bitrate : 4500;
                 int targetFps = fps > 0 ? fps : 30;
                 int gop = targetFps * 2;
                 int gopMin = targetFps;
 
                 String inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+discardcorrupt+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re";
-                String vCodecArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -keyint_min " + gopMin + " -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v " + br + "k -minrate " + br + "k -maxrate " + br + "k -bufsize " + br + "k";
+                String vCodecArgs = "-rtmp_live live -flvflags no_duration_filesize -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " -keyint_min " + gopMin + " -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v " + br + "k -minrate " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k";
                 
-                String cmd = "-protocol_whitelist file,http,https,tcp,tls,crypto,pipe " + inputArgs + " -i \"" + cleanUrl + "\" "
+                String cmd = "-protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe " + inputArgs + " -i \"" + cleanUrl + "\" "
+                        + "-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
                         + vCodecArgs + " "
-                        + "-af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
+                        + "-map 0:v:0 -map 0:a? -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 " + outArgs;
 
                 Log.i(TAG, "Executing M3U8 restream: " + cmd);
-                FFmpegKit.executeAsync(cmd, session -> {
-                    Log.i(TAG, "M3U8 Restream session completed with state: " + session.getState() + ", code: " + session.getReturnCode());
+                com.arthenica.ffmpegkit.FFmpegSession session = FFmpegKit.executeAsync(cmd, s -> {
+                    Log.i(TAG, "M3U8 Restream session completed with state: " + s.getState() + ", code: " + s.getReturnCode());
                     
-                    // Auto-restart logic for Java bridge
-                    if (session.getReturnCode() != null && !session.getReturnCode().isValueSuccess() && !ReturnCode.isCancel(session.getReturnCode())) {
-                        Log.w(TAG, "Restream disconnected unexpectedly, retrying in 5s...");
-                        try {
-                            Thread.sleep(5000);
-                            startM3u8Restream(m3u8Url, bgBase64, rtmpUrlsJson, bitrate, fps, width, height);
-                        } catch (InterruptedException ignored) {}
+                    // Auto-restart logic (up to 3 retries with 2s backoff)
+                    if (s.getReturnCode() != null && !s.getReturnCode().isValueSuccess() && !ReturnCode.isCancel(s.getReturnCode())) {
+                        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                            reconnectAttempts++;
+                            Log.w(TAG, "Restream disconnected unexpectedly, retry " + reconnectAttempts + "/3 in 2s...");
+                            try {
+                                Thread.sleep(2000);
+                                startM3u8Restream(m3u8Url, bgBase64, rtmpUrlsJson, bitrate, fps, width, height);
+                            } catch (InterruptedException ignored) {}
+                        } else {
+                            Log.e(TAG, "Max reconnect attempts reached for M3U8 restream.");
+                        }
+                    } else {
+                        reconnectAttempts = 0;
                     }
                 }, log -> {
                     Log.d(TAG, "FFmpeg: " + log.getMessage());
                 }, statistics -> {});
+
+                if (session != null) {
+                    activeSessionId = session.getSessionId();
+                }
             } catch (Throwable e) {
                 Log.e(TAG, "Fatal error in startM3u8Restream", e);
-                e.printStackTrace();
             }
         }).start();
     }
-
-    private int reconnectAttempts = 0;
-    private static final int MAX_RECONNECT_ATTEMPTS = 20;
 
     @JavascriptInterface
     public void startLivePipe(String rtmpUrlsJson, int width, int height, int fps, int bitrate) {
@@ -161,22 +173,22 @@ public class NativeRtmpBridge {
                     return;
                 }
 
-                int br = (bitrate > 500 && bitrate <= 6000) ? bitrate : 4000;
+                int br = (bitrate >= 1500 && bitrate <= 6000) ? bitrate : 4500;
                 int targetFps = fps > 0 ? fps : 30;
                 int gop = targetFps * 2;
 
-                String cmd = "-timeout 30000000 -rw_timeout 30000000 -re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
-                        + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
+                String cmd = "-protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe -timeout 30000000 -rw_timeout 30000000 -re -i \"" + activePipePath + "\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 "
+                        + "-rtmp_live live -flvflags no_duration_filesize -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r " + targetFps + " -g " + gop + " "
                         + "-b:v " + br + "k -maxrate " + br + "k -bufsize " + (br * 2) + "k "
                         + "-af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest " + outArgs;
 
-                FFmpegKit.executeAsync(cmd, session -> {
-                     if (session.getReturnCode() != null && !session.getReturnCode().isValueSuccess() && !ReturnCode.isCancel(session.getReturnCode())) {
+                com.arthenica.ffmpegkit.FFmpegSession session = FFmpegKit.executeAsync(cmd, s -> {
+                     if (s.getReturnCode() != null && !s.getReturnCode().isValueSuccess() && !ReturnCode.isCancel(s.getReturnCode())) {
                         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                             reconnectAttempts++;
-                            Log.w(TAG, "Live pipe disconnected, retrying " + reconnectAttempts + " in 5s...");
+                            Log.w(TAG, "Live pipe disconnected, retry " + reconnectAttempts + "/3 in 2s...");
                             try {
-                                Thread.sleep(5000);
+                                Thread.sleep(2000);
                                 startLivePipe(rtmpUrlsJson, width, height, fps, bitrate);
                             } catch (InterruptedException ignored) {}
                         }
@@ -184,6 +196,10 @@ public class NativeRtmpBridge {
                         reconnectAttempts = 0;
                     }
                 });
+
+                if (session != null) {
+                    activeSessionId = session.getSessionId();
+                }
                 pipeOutputStream = new FileOutputStream(activePipePath);
             } catch (Exception e) {
                 Log.e(TAG, "Error starting live pipe", e);
@@ -209,7 +225,10 @@ public class NativeRtmpBridge {
         Log.i(TAG, "stopStream called");
         reconnectAttempts = MAX_RECONNECT_ATTEMPTS + 1; // Prevent auto-restart
         try {
-            FFmpegKit.cancel();
+            if (activeSessionId > 0) {
+                FFmpegKit.cancel(activeSessionId);
+                activeSessionId = -1;
+            }
             if (pipeOutputStream != null) {
                 try { pipeOutputStream.close(); } catch (Exception ignored) {}
                 pipeOutputStream = null;

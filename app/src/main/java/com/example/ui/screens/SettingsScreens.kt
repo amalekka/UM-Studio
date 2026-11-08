@@ -365,6 +365,7 @@ private fun updateEndpointEnabled(endpoint: PlatformEndpoint, enabled: Boolean):
     is PlatformEndpoint.Twitter -> endpoint.copy(isEnabled = enabled)
     is PlatformEndpoint.Instagram -> endpoint.copy(isEnabled = enabled)
     is PlatformEndpoint.Kick -> endpoint.copy(isEnabled = enabled)
+    is PlatformEndpoint.Telegram -> endpoint.copy(isEnabled = enabled)
     is PlatformEndpoint.CustomRTMP -> endpoint.copy(isEnabled = enabled)
 }
 
@@ -376,5 +377,6 @@ private fun updateEndpointKey(endpoint: PlatformEndpoint, key: String): Platform
     is PlatformEndpoint.Twitter -> endpoint.copy(streamKey = key)
     is PlatformEndpoint.Instagram -> endpoint.copy(streamKey = key)
     is PlatformEndpoint.Kick -> endpoint.copy(streamKey = key)
+    is PlatformEndpoint.Telegram -> endpoint.copy(streamKey = key)
     is PlatformEndpoint.CustomRTMP -> endpoint.copy(streamKey = key)
 }

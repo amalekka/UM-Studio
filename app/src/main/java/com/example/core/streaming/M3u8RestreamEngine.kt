@@ -60,7 +60,7 @@ class M3u8RestreamEngine(
     val diagnosticIsError: StateFlow<Boolean> = _diagnosticIsError.asStateFlow()
 
     private var reconnectAttempts = 0
-    private val maxReconnectAttempts = 20
+    private val maxReconnectAttempts = 3
     private var reconnectRunnable: Runnable? = null
     private val handler = Handler(Looper.getMainLooper())
 
@@ -276,14 +276,16 @@ class M3u8RestreamEngine(
                 "-f tee -map 0:v -map 0:a? \"$teeList\""
             }
 
-            val fps = if (config.videoQuality.fps > 0) config.videoQuality.fps else 30
-            val bitrateKbps = (config.videoQuality.defaultBitrate / 1000).coerceIn(1500, 4500)
-            val gop = fps * 2
+            val fps = if (config.targetFps > 0) config.targetFps else if (config.videoQuality.fps > 0) config.videoQuality.fps else 30
+            val bitrateKbps = (if (config.videoBitrateKbps > 0) config.videoBitrateKbps else (config.videoQuality.defaultBitrate / 1000)).coerceIn(1500, 6000)
+            val gop = fps * (if (config.keyframeIntervalSec > 0) config.keyframeIntervalSec else 2)
+            val gopMin = fps
 
-            // Check if stream is H.264 compatible without accessing exoPlayer on background threads
+            val hasAudio = hasAudioTrack()
+            // Check if stream is H.264 compatible and has audio without accessing exoPlayer on background threads
             val canStreamCopy = canStreamCopyOverride ?: run {
                 if (Looper.myLooper() == Looper.getMainLooper()) {
-                    (preferStreamCopy && isH264Source() && !hasOverlay)
+                    (preferStreamCopy && isH264Source() && !hasOverlay && hasAudio)
                 } else {
                     false
                 }
@@ -294,16 +296,20 @@ class M3u8RestreamEngine(
                 "-headers \"$hLines\" "
             } else ""
 
+            val encoderCodec = if (config.encoderEngine == com.example.core.model.EncoderEngine.HARDWARE_MEDIACODEC) "h264_mediacodec" else "libx264"
             val vCodecArgs = if (canStreamCopy) {
                 "-c:v copy"
             } else {
-                val gopMin = fps
-                "-rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -keyint_min $gopMin -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -minrate ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+                "-rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -keyint_min $gopMin -c:v $encoderCodec -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -minrate ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
             }
 
             val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+discardcorrupt+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
-            val cmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$cleanUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
-            Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy): $cmd")
+            val cmd = if (hasAudio) {
+                "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe $inputArgs -i \"$cleanUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+            } else {
+                "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe $inputArgs -i \"$cleanUrl\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 $vCodecArgs -map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest $outArgs"
+            }
+            Log.i("M3u8Engine", "Starting native FFmpeg M3U8 restream (canStreamCopy=$canStreamCopy, hasAudio=$hasAudio): $cmd")
 
             try { stopFfmpeg() } catch (e: Throwable) {}
             executeFfmpegCommand(cmd, canStreamCopy, config, outArgs, headerPrefix, cleanUrl, fps, gop, bitrateKbps)
@@ -311,6 +317,22 @@ class M3u8RestreamEngine(
             Log.e("M3u8Engine", "Fatal error in startRestreaming", e)
             _diagnosticMessage.value = "Restream Error: ${e.message}"
             _diagnosticIsError.value = true
+        }
+    }
+
+    fun hasAudioTrack(): Boolean {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return true
+        }
+        return try {
+            val tracks = exoPlayer?.currentTracks
+            if (tracks != null) {
+                tracks.groups.any { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }
+            } else {
+                exoPlayer?.audioFormat != null
+            }
+        } catch (e: Exception) {
+            true
         }
     }
 
@@ -345,9 +367,9 @@ class M3u8RestreamEngine(
                             _diagnosticMessage.value = "Protocol Fallback • Connecting..."
                             _diagnosticIsError.value = false
                             val httpUrl = m3u8.replaceFirst("https://", "http://")
-                            val vCodecArgs = "-rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
+                            val vCodecArgs = "-rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -keyint_min $fps -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k"
                             val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
-                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            val httpCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe $inputArgs -i \"$httpUrl\" $vCodecArgs -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(httpCmd, false, config, outArgs, headerPrefix, httpUrl, fps, gop, bitrateKbps)
                             return@executeAsync
                         }
@@ -358,12 +380,12 @@ class M3u8RestreamEngine(
                             _diagnosticMessage.value = "Transcoder Fallback • Handshake..."
                             _diagnosticIsError.value = false
                             val inputArgs = "-user_agent \"LiveStreamPro/1.0\" -probesize 2M -analyzeduration 2M -fflags +nobuffer+genpts+flush_packets -flags +low_delay -timeout 30000000 -rw_timeout 30000000 -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re"
-                            val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,crypto,pipe $inputArgs -i \"$m3u8\" -rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
+                            val transcodeCmd = "$headerPrefix-protocol_whitelist file,http,https,tcp,tls,rtmp,rtmps,crypto,pipe $inputArgs -i \"$m3u8\" -rtmp_live live -flvflags no_duration_filesize -pix_fmt yuv420p -r $fps -g $gop -keyint_min $fps -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${bitrateKbps * 2}k -af aresample=async=1 -c:a aac -b:a 128k -ar 44100 -ac 2 $outArgs"
                             executeFfmpegCommand(transcodeCmd, false, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
                             return@executeAsync
                         }
 
-                        // 3. Robust Auto-Restart on unexpected disconnection with retry limit
+                        // 3. Robust Auto-Restart on unexpected disconnection with 2-second backoff
                         val rawError = logs.lineSequence()
                             .map { it.trim() }
                             .filter { line ->
@@ -376,7 +398,6 @@ class M3u8RestreamEngine(
                             }
                             .lastOrNull() ?: "Session Closed"
                         
-                        // Redact URLs and Keys from error message for user privacy and clarity
                         val redactedError = rawError
                             .replace(Regex("rtmp[s]?://[^ ]+"), "[RTMP URL]")
                             .replace(Regex("http[s]?://[^ ]+"), "[M3U8 URL]")
@@ -387,9 +408,10 @@ class M3u8RestreamEngine(
 
                         if (reconnectAttempts < maxReconnectAttempts) {
                             reconnectAttempts++
-                            Log.e("M3u8Engine", "Stream disconnected ($finalError). Retry $reconnectAttempts/$maxReconnectAttempts in 5s...")
-                            _diagnosticMessage.value = "Error: $finalError • Retrying..."
-                            _diagnosticIsError.value = true
+                            Log.e("M3u8Engine", "Stream disconnected ($finalError). Retry $reconnectAttempts/$maxReconnectAttempts in 2s...")
+                            _diagnosticMessage.value = "Reconnecting ($reconnectAttempts/$maxReconnectAttempts) in 2s..."
+                            _diagnosticIsError.value = false
+                            streamManager.setStreamingStatus(StreamingStatus.RECONNECTING)
                             
                             reconnectRunnable?.let { handler.removeCallbacks(it) }
                             reconnectRunnable = Runnable {
@@ -398,10 +420,10 @@ class M3u8RestreamEngine(
                                     executeFfmpegCommand(cmd, allowFallbackToTranscode, config, outArgs, headerPrefix, m3u8, fps, gop, bitrateKbps)
                                 }
                             }
-                            handler.postDelayed(reconnectRunnable!!, 5000)
+                            handler.postDelayed(reconnectRunnable!!, 2000)
                         } else {
                             Log.e("M3u8Engine", "Max reconnect attempts reached. Stopping.")
-                            _diagnosticMessage.value = "Fatal Error: $finalError"
+                            _diagnosticMessage.value = "Connection Lost: $finalError"
                             _diagnosticIsError.value = true
                             _isRestreaming.value = false
                             streamManager.setStreamingStatus(StreamingStatus.ERROR)
@@ -543,6 +565,52 @@ class M3u8RestreamEngine(
         exoPlayer?.isPlaying == true
     } else {
         false
+    }
+
+    data class StreamHealth(
+        val resolution: String = "Probing...",
+        val codec: String = "Probing...",
+        val audioTrack: String = "Probing...",
+        val isReady: Boolean = false,
+        val isPlaying: Boolean = false
+    )
+
+    fun getStreamHealth(): StreamHealth {
+        val player = exoPlayer ?: return StreamHealth()
+        return try {
+            val vf = player.videoFormat
+            val af = player.audioFormat
+            val res = if (vf != null && vf.width > 0 && vf.height > 0) {
+                "${vf.width}x${vf.height} (${if (vf.height >= 1080) "1080p FHD" else if (vf.height >= 720) "720p HD" else "${vf.height}p"})"
+            } else if (player.playbackState == Player.STATE_READY) "Standard Stream" else "Probing..."
+
+            val vCodec = if (vf != null) {
+                val mime = vf.sampleMimeType ?: ""
+                when {
+                    mime.contains("hevc", ignoreCase = true) || mime.contains("h265", ignoreCase = true) -> "HEVC (H.265)"
+                    mime.contains("avc", ignoreCase = true) || mime.contains("h264", ignoreCase = true) -> "H.264 (AVC)"
+                    mime.contains("av1", ignoreCase = true) -> "AV1"
+                    mime.isNotBlank() -> mime.substringAfterLast('/')
+                    else -> "H.264"
+                }
+            } else if (player.playbackState == Player.STATE_READY) "H.264" else "Probing..."
+
+            val aStatus = if (af != null) {
+                val ch = if (af.channelCount > 1) "Stereo (${af.channelCount}ch)" else "Mono (1ch)"
+                val sr = if (af.sampleRate > 0) "${af.sampleRate / 1000}kHz" else "44.1kHz"
+                "AAC • $ch • $sr"
+            } else if (player.playbackState == Player.STATE_READY) "No Audio / Silent" else "Probing audio..."
+
+            StreamHealth(
+                resolution = res,
+                codec = vCodec,
+                audioTrack = aStatus,
+                isReady = player.playbackState == Player.STATE_READY,
+                isPlaying = player.isPlaying
+            )
+        } catch (e: Exception) {
+            StreamHealth()
+        }
     }
 
     fun getPlayer(): ExoPlayer? = exoPlayer
