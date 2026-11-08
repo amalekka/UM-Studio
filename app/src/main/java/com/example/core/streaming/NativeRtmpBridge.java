@@ -94,20 +94,47 @@ public class NativeRtmpBridge {
         }
     }
 
+    private void sendStreamState(String state) {
+        if (webView != null) {
+            webView.post(() -> {
+                try {
+                    webView.evaluateJavascript("if(window.onNativeStreamState) window.onNativeStreamState('" + state + "');", null);
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
+    private void sendStreamError(String message) {
+        if (webView != null) {
+            webView.post(() -> {
+                try {
+                    String cleanMsg = message != null ? message.replace("'", "\\'").replace("\n", " ") : "Unknown error";
+                    webView.evaluateJavascript("if(window.onNativeStreamError) window.onNativeStreamError('" + cleanMsg + "');", null);
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
     @JavascriptInterface
     public void startM3u8Restream(String m3u8Url, String bgBase64, String rtmpUrlsJson, int bitrate, int fps, int width, int height) {
         new Thread(() -> {
             try {
                 stopStream();
+                sendStreamState("CONNECTING");
+
                 String cleanUrl = m3u8Url != null ? m3u8Url.trim() : "";
                 if (cleanUrl.isEmpty()) {
                     Log.e(TAG, "Cannot start M3U8 restream: M3U8 URL is empty or null");
+                    sendStreamError("M3U8 URL is empty");
+                    sendStreamState("ERROR");
                     return;
                 }
 
                 String outArgs = buildOutputArgs(rtmpUrlsJson);
                 if (outArgs == null || outArgs.isEmpty()) {
                     Log.e(TAG, "Cannot start M3U8 restream: Output RTMP arguments are empty");
+                    sendStreamError("No valid RTMP destinations configured");
+                    sendStreamState("ERROR");
                     return;
                 }
 
@@ -128,30 +155,36 @@ public class NativeRtmpBridge {
                 com.arthenica.ffmpegkit.FFmpegSession session = FFmpegKit.executeAsync(cmd, s -> {
                     Log.i(TAG, "M3U8 Restream session completed with state: " + s.getState() + ", code: " + s.getReturnCode());
                     
-                    // Auto-restart logic (up to 3 retries with 2s backoff)
                     if (s.getReturnCode() != null && !s.getReturnCode().isValueSuccess() && !ReturnCode.isCancel(s.getReturnCode())) {
                         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                             reconnectAttempts++;
                             Log.w(TAG, "Restream disconnected unexpectedly, retry " + reconnectAttempts + "/3 in 2s...");
+                            sendStreamState("CONNECTING");
                             try {
                                 Thread.sleep(2000);
                                 startM3u8Restream(m3u8Url, bgBase64, rtmpUrlsJson, bitrate, fps, width, height);
                             } catch (InterruptedException ignored) {}
                         } else {
                             Log.e(TAG, "Max reconnect attempts reached for M3U8 restream.");
+                            sendStreamError("Connection Lost: Maximum retries reached");
+                            sendStreamState("ERROR");
                         }
                     } else {
                         reconnectAttempts = 0;
                     }
                 }, log -> {
                     Log.d(TAG, "FFmpeg: " + log.getMessage());
-                }, statistics -> {});
+                }, statistics -> {
+                    sendStreamState("LIVE");
+                });
 
                 if (session != null) {
                     activeSessionId = session.getSessionId();
                 }
             } catch (Throwable e) {
                 Log.e(TAG, "Fatal error in startM3u8Restream", e);
+                sendStreamError(e.getMessage());
+                sendStreamState("ERROR");
             }
         }).start();
     }
@@ -161,15 +194,21 @@ public class NativeRtmpBridge {
         new Thread(() -> {
             try {
                 stopStream();
+                sendStreamState("CONNECTING");
+
                 String outArgs = buildOutputArgs(rtmpUrlsJson);
                 if (outArgs == null || outArgs.isEmpty()) {
                     Log.e(TAG, "Cannot start live pipe: Output RTMP arguments are empty");
+                    sendStreamError("No valid RTMP destinations configured");
+                    sendStreamState("ERROR");
                     return;
                 }
 
                 activePipePath = FFmpegKitConfig.registerNewFFmpegPipe(context);
                 if (activePipePath == null) {
                     Log.e(TAG, "Failed to register FFmpeg pipe");
+                    sendStreamError("Failed to register FFmpeg pipe");
+                    sendStreamState("ERROR");
                     return;
                 }
 
@@ -187,14 +226,22 @@ public class NativeRtmpBridge {
                         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                             reconnectAttempts++;
                             Log.w(TAG, "Live pipe disconnected, retry " + reconnectAttempts + "/3 in 2s...");
+                            sendStreamState("CONNECTING");
                             try {
                                 Thread.sleep(2000);
                                 startLivePipe(rtmpUrlsJson, width, height, fps, bitrate);
                             } catch (InterruptedException ignored) {}
+                        } else {
+                            sendStreamError("Live pipe connection lost");
+                            sendStreamState("ERROR");
                         }
                     } else {
                         reconnectAttempts = 0;
                     }
+                }, log -> {
+                    Log.d(TAG, "FFmpeg: " + log.getMessage());
+                }, statistics -> {
+                    sendStreamState("LIVE");
                 });
 
                 if (session != null) {
@@ -203,6 +250,8 @@ public class NativeRtmpBridge {
                 pipeOutputStream = new FileOutputStream(activePipePath);
             } catch (Exception e) {
                 Log.e(TAG, "Error starting live pipe", e);
+                sendStreamError(e.getMessage());
+                sendStreamState("ERROR");
             }
         }).start();
     }
@@ -237,6 +286,7 @@ public class NativeRtmpBridge {
                 try { FFmpegKitConfig.closeFFmpegPipe(activePipePath); } catch (Exception ignored) {}
                 activePipePath = null;
             }
+            sendStreamState("STOPPED");
         } catch (Exception e) {
             Log.e(TAG, "Error stopping stream", e);
         }
